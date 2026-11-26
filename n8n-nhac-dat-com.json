@@ -24,7 +24,7 @@
     {
       "parameters": {
         "chatId": "THAY_BANG_CHAT_ID_NHOM",
-        "text": "🍱 Menu cơm trưa hôm nay đã có! Mọi người vào chọn món trước 10:30 nhé:\nTHAY_BANG_LINK_APP",
+        "text": "Menu cơm trưa hôm nay có rồi, mọi người chọn món trước 10:30 nhé:\nTHAY_BANG_LINK_APP",
         "additionalFields": {}
       },
       "id": "a1f0c3a2-0003-4c1e-9b11-000000000003",
@@ -37,7 +37,7 @@
     {
       "parameters": {
         "chatId": "THAY_BANG_CHAT_ID_NHOM",
-        "text": "⏰ Còn 15 phút nữa chốt đơn cơm trưa. Ai chưa chọn món thì vào ngay nhé:\nTHAY_BANG_LINK_APP",
+        "text": "Còn 15 phút nữa chốt cơm trưa. Ai chưa chọn thì vào chọn nhé:\nTHAY_BANG_LINK_APP",
         "additionalFields": {}
       },
       "id": "a1f0c3a2-0004-4c1e-9b11-000000000004",
