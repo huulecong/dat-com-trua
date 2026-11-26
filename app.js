@@ -1,7 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, collection, onSnapshot, setDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig, ADMIN_EMAILS, ALLOWED_DOMAIN } from "./config.js?v=4";
+import { firebaseConfig, ADMIN_EMAILS, ALLOWED_DOMAIN } from "./config.js?v=5";
 
 const TZ = "Asia/Ho_Chi_Minh";
 const BANKS = [
@@ -88,7 +88,7 @@ const skeleton = () => `<div class="sk" aria-hidden="true"><i></i><i></i><i></i>
 const S = {
   today: vnNow(), tab:"order", authUser:null, authReady:false,
   uid:null, myName:"", isAdmin:false,
-  settings:null, menu:null, orders:{}, loaded:{menu:false,orders:false},
+  settings:null, menu:null, orders:{}, users:{}, loaded:{menu:false,orders:false},
   cart:{}, note:"", cartDirty:false,
   draft:null, draftDirty:false, setDraft:null, setDirty:false, busy:false
 };
@@ -248,8 +248,8 @@ function aggregate(){
 function summaryView(){
   if(!S.loaded.orders) return skeleton();
   const a=aggregate();
-  if(!a.list.length) return `<div class="empty"><h3>Chưa ai đặt món</h3><p>Có người đặt là danh sách hiện ở đây.</p>${S.isAdmin?`<button class="btn ghost" data-act="copyRemind">Chép tin nhắc mọi người</button>`:""}</div>`;
-  let h=`<div class="stats"><div class="stat"><b class="num">${a.portions}</b><span>phần</span></div><div class="stat"><b class="num">${a.list.length}</b><span>người</span></div><div class="stat"><b class="num">${money(a.total)}</b><span>tổng</span></div></div>`;
+  if(!a.list.length) return `<div class="empty"><h3>Chưa ai đặt món</h3><p>Có người đặt là danh sách hiện ở đây.</p></div>${remindPanel()}`;
+  let h=remindPanel()+`<div class="stats"><div class="stat"><b class="num">${a.portions}</b><span>phần</span></div><div class="stat"><b class="num">${a.list.length}</b><span>người</span></div><div class="stat"><b class="num">${money(a.total)}</b><span>tổng</span></div></div>`;
   h+=`<div class="row"><button class="btn" data-act="copyStore">Chép tin gửi quán</button><button class="btn ghost" data-act="csv">Tải file Excel</button></div>`;
   h+=`<h2>Theo món</h2><div class="tbl-wrap"><table><thead><tr><th>Món</th><th class="r">SL</th><th class="r">Đơn giá</th><th class="r">Thành tiền</th></tr></thead><tbody>`;
   for(const d of a.dishes) h+=`<tr><td>${esc(d.name)}</td><td class="r num"><b>${d.qty}</b></td><td class="r num">${money(d.price)}</td><td class="r num">${money(d.price*d.qty)}</td></tr>`;
@@ -263,6 +263,42 @@ function summaryView(){
     </li>`;
   }
   return h+`</ul>`;
+}
+/* ---------- nhắc qua email (admin) ---------- */
+function people(){
+  // Gộp người đã đăng nhập (users) và người từng đặt (orders), bỏ admin đang dùng
+  const m={};
+  for(const [uid,d] of Object.entries(S.orders)) if(d?.email) m[uid]={uid,name:d.name||d.email,email:d.email};
+  for(const [uid,d] of Object.entries(S.users)) if(d?.email) m[uid]={uid,name:d.name||d.email,email:d.email};
+  delete m[S.uid];
+  return Object.values(m).sort((a,b)=>a.name.localeCompare(b.name,"vi"));
+}
+function remindTargets(who){
+  const all=people(), done=new Set(todayOrders().map(o=>o.uid));
+  return who==="all" ? all : all.filter(p=>!done.has(p.uid));
+}
+function openGmail(list){
+  if(!list.length){ toast("Không có ai để gửi"); return; }
+  const t=S.today, dd=`${String(t.d).padStart(2,"0")}/${String(t.m).padStart(2,"0")}`;
+  const su=`Nhắc đặt cơm trưa ${dd}`;
+  const body=`Chào mọi người,\n\nMenu cơm trưa hôm nay có rồi. Ai chưa chọn món thì vào chọn trước ${S.settings?.deadline||"10:30"} nhé:\n${location.origin+location.pathname}\n\nCảm ơn mọi người.`;
+  const q=new URLSearchParams({view:"cm",fs:"1",bcc:list.map(x=>x.email).join(","),su,body,authuser:S.authUser?.email||""});
+  window.open(`https://mail.google.com/mail/?${q}`,"_blank","noopener");
+}
+function remindPanel(){
+  if(!S.isAdmin || !S.menu) return "";
+  const all=people(), todo=remindTargets("todo");
+  if(!all.length) return `<section class="remind"><p class="hint" style="margin:0">Chưa có email nào. Mọi người cần đăng nhập vào app ít nhất một lần thì mới gửi nhắc được.</p></section>`;
+  const names=todo.slice(0,6).map(p=>esc(p.name.split(" ").slice(-1)[0])).join(", ")+(todo.length>6?` và ${todo.length-6} người khác`:"");
+  return `<section class="remind">
+    <p class="r-title">${todo.length?`<b>${todo.length}</b> người chưa đặt`:"Mọi người đều đã đặt"}<span> / ${all.length} người đã đăng nhập</span></p>
+    ${todo.length?`<p class="hint">${names}</p>`:""}
+    <div class="row">
+      ${todo.length?`<button class="btn" data-act="mailRemind" data-who="todo">Gửi email nhắc ${todo.length} người</button>`:""}
+      <button class="btn ghost" data-act="mailRemind" data-who="all">Gửi tất cả</button>
+      <button class="link" data-act="copyEmails" data-who="${todo.length?"todo":"all"}">Chép email</button>
+    </div>
+  </section>`;
 }
 function storeMessage(){
   const a=aggregate(), t=S.today;
@@ -356,6 +392,8 @@ $("#view").addEventListener("click",async e=>{
     else if(act==="csv"){ downloadCsv(); }
     else if(act==="copyStore"){ copy(storeMessage()); }
     else if(act==="copyRemind"){ copy(remindMessage()); }
+    else if(act==="mailRemind"){ openGmail(remindTargets(b.dataset.who)); }
+    else if(act==="copyEmails"){ const l=remindTargets(b.dataset.who); if(l.length) copy(l.map(x=>x.email).join(", ")); }
     else if(act==="togglePaid"){ const uid=b.dataset.uid, cur=S.orders[uid]?.days?.[dayKey()]; if(cur) await setDoc(doc(fs,"orders",uid),{days:{[dayKey()]:{paid:!cur.paid}}},{merge:true}); }
     else if(act==="addRow"){ S.draft.items.push({id:uidShort(),name:"",price:0}); S.draftDirty=true; render(); const r=document.querySelectorAll('.edit-row input[data-f="name"]'); r[r.length-1]?.focus(); }
     else if(act==="delRow"){ S.draft.items.splice(+b.closest(".edit-row").dataset.i,1); S.draftDirty=true; render(); }
@@ -372,8 +410,8 @@ $("#barBtn").addEventListener("click",async()=>{
   const total=items.reduce((a,i)=>a+i.qty*i.price,0);
   S.busy=true; updateBar();
   try{
-    await saveMine(prev=>({items,note:S.note.trim(),total,at:Date.now(),paidClaim:false,paid:(prev?.paid && prev.total===total)||false}));
-    S.cartDirty=false; toast("Đã đặt món. Quét mã QR để chuyển khoản nhé"); render(); window.scrollTo({top:0,behavior:"smooth"});
+    await saveMine(prev=>({items,note:S.note.trim(),total,at:Date.now(),paidClaim:false,paid:S.isAdmin||(prev?.paid && prev.total===total)||false}));
+    S.cartDirty=false; toast(S.isAdmin?"Đã đặt món":"Đã đặt món. Quét mã QR để chuyển khoản nhé"); render(); window.scrollTo({top:0,behavior:"smooth"});
   }catch(err){ handleErr(err); }
   S.busy=false; updateBar();
 });
@@ -425,9 +463,10 @@ function subscribeMenu(){
 function startData(){
   unsubs.push(onSnapshot(doc(fs,"config","settings"),s=>{ S.settings=s.exists()?s.data():null; safeRender(); },e=>console.warn(e)));
   subscribeMenu();
+  if(S.isAdmin) unsubs.push(onSnapshot(collection(fs,"users"),s=>{ const o={}; s.forEach(d=>o[d.id]=d.data()); S.users=o; safeRender(); },e=>console.warn("users:",e.code)));
   unsubs.push(onSnapshot(collection(fs,"orders"),s=>{ if(s.metadata.fromCache && s.empty) return; const o={}; s.forEach(d=>o[d.id]=d.data()); S.orders=o; S.loaded.orders=true; safeRender(); },e=>{ console.warn(e); S.loaded.orders=true; safeRender(); }));
 }
-function stopData(){ unsubs.forEach(u=>u()); unsubs=[]; unsubMenu?.(); unsubMenu=null; S.orders={}; S.menu=null; S.settings=null; S.loaded={menu:false,orders:false}; }
+function stopData(){ unsubs.forEach(u=>u()); unsubs=[]; unsubMenu?.(); unsubMenu=null; S.orders={}; S.users={}; S.menu=null; S.settings=null; S.loaded={menu:false,orders:false}; }
 
 if(configured){
   getRedirectResult(auth).catch(err=>console.warn(err));
@@ -441,6 +480,8 @@ if(configured){
       S.uid=u.uid; S.myName=u.displayName||u.email||"Bạn";
       S.isAdmin=ADMIN_EMAILS.map(x=>x.toLowerCase()).includes((u.email||"").toLowerCase());
       startData();
+      // Ghi lại email để admin gửi nhắc. Lỗi (chưa cập nhật rules) thì bỏ qua.
+      setDoc(doc(fs,"users",u.uid),{name:S.myName,email:u.email||"",lastSeen:Date.now()},{merge:true}).catch(e=>console.warn("users:",e.code));
     }
     render();
   });

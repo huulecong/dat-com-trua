@@ -142,6 +142,12 @@ textarea{resize:vertical;min-height:64px}
 .chip.wait{background:var(--warn-tint);color:var(--warn)}
 .chip.no{background:transparent;color:var(--muted);border:1px solid var(--line2);font-weight:500}
 
+/* Nhắc đặt cơm (admin) */
+.remind{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:12px;padding:14px 16px;margin:16px 0 4px}
+.r-title{margin:0 0 4px;font-size:15px}
+.r-title span{color:var(--muted)}
+.remind .hint{margin:0 0 12px}
+
 /* Summary */
 .stats{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--line);border-radius:12px;background:var(--card);margin:16px 0 12px}
 .stat{padding:14px 14px 12px}
@@ -185,7 +191,7 @@ td.r,th.r{text-align:right}
 .toast.show{opacity:1;transform:translate(-50%,0)}
 </style>
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
-<script type="module" src="app.js?v=4"></script>
+<script type="module" src="app.js?v=5"></script>
 </head>
 <body>
 <div class="wrap">

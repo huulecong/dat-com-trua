@@ -8,7 +8,15 @@ service cloud.firestore {
     function isAdmin() {
       return signedIn()
         && request.auth.token.email_verified == true
-        && request.auth.token.email.lower() in ['email-admin@gmail.com'];
+        && request.auth.token.email.lower() in ['anhuynh14business@gmail.com'];
+    }
+
+    // Danh sách người đã đăng nhập (tên, email) để admin gửi email nhắc.
+    // Mỗi người chỉ ghi hồ sơ của mình, chỉ admin đọc được danh sách.
+    match /users/{uid} {
+      allow read: if isAdmin();
+      allow write: if signedIn() && request.auth.uid == uid
+        && request.resource.data.email == request.auth.token.email;
     }
 
     // Cài đặt tài khoản nhận tiền, giờ chốt: ai đăng nhập cũng đọc được, chỉ admin sửa
