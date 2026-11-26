@@ -1,6 +1,6 @@
 // 1) Dán cấu hình Firebase của bạn vào đây
 //    (Firebase Console → Project settings → Your apps → Web app → SDK setup and configuration → Config)
-const firebaseConfig = {
+export const firebaseConfig = {
   apiKey: "AIzaSyDaCWFsxIrDnhkqHSahb1qyTs6RkCvKOmY",
   authDomain: "datcomtrua-14f62.firebaseapp.com",
   projectId: "datcomtrua-14f62",
