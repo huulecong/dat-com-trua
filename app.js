@@ -309,18 +309,21 @@ function storeMessage(){
   if(notes.length) s+=`\nGhi chú:\n${notes.join("\n")}`;
   return s;
 }
-function csvText(){
-  const a=aggregate(), q=v=>`"${String(v).replace(/"/g,'""')}"`;
+function sheetRows(){
+  const a=aggregate();
   const rows=[["Tổng hợp đặt cơm ngày",dayKey()],[],["Món","Số lượng","Đơn giá","Thành tiền"]];
   a.dishes.forEach(d=>rows.push([d.name,d.qty,d.price,d.qty*d.price]));
   rows.push(["Tổng",a.portions,"",a.total],[],["Người đặt","Món","Ghi chú","Tiền","Thanh toán"]);
   a.list.forEach(o=>rows.push([o.name||"",o.items.map(i=>`${i.qty} ${i.name}`).join("; "),o.note||"",o.total,o.paid?"Đã nhận":o.paidClaim?"Báo đã chuyển":"Chưa trả"]));
-  return "\uFEFF"+rows.map(r=>r.map(q).join(",")).join("\r\n");
+  return rows;
 }
-function downloadCsv(){
-  const blob=new Blob([csvText()],{type:"text/csv;charset=utf-8"}), url=URL.createObjectURL(blob);
-  const a=document.createElement("a"); a.href=url; a.download=`dat-com-${dayKey()}.csv`; document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(()=>URL.revokeObjectURL(url),1000);
+async function downloadCsv(){
+  const XLSX = await import("https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs");
+  const ws = XLSX.utils.aoa_to_sheet(sheetRows());
+  ws["!cols"] = [{wch:26},{wch:34},{wch:20},{wch:12},{wch:16}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Đặt cơm");
+  XLSX.writeFile(wb, `dat-com-${dayKey()}.xlsx`);
 }
 const remindMessage = () => `Menu cơm trưa hôm nay có rồi, mọi người chọn món trước ${S.settings?.deadline||"10:30"} nhé:\n${location.origin+location.pathname}`;
 
@@ -389,7 +392,7 @@ $("#view").addEventListener("click",async e=>{
     else if(act==="cancel"){ if(confirm("Huỷ đơn hôm nay?")){ await saveMine(()=>null); S.cartDirty=false; toast("Đã huỷ đơn"); } }
     else if(act==="copyAcc"){ copy(S.settings?.accountNo||""); }
     else if(act==="copyInfo"){ copy(b.dataset.v||""); }
-    else if(act==="csv"){ downloadCsv(); }
+    else if(act==="csv"){ await downloadCsv(); }
     else if(act==="copyStore"){ copy(storeMessage()); }
     else if(act==="copyRemind"){ copy(remindMessage()); }
     else if(act==="mailRemind"){ openGmail(remindTargets(b.dataset.who)); }
