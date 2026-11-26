@@ -1,0 +1,440 @@
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, doc, collection, onSnapshot, setDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { firebaseConfig, ADMIN_EMAILS, ALLOWED_DOMAIN } from "./config.js";
+
+const TZ = "Asia/Ho_Chi_Minh";
+const BANKS = [
+  ["Vietcombank","970436"],["VietinBank","970415"],["BIDV","970418"],["Agribank","970405"],
+  ["Techcombank","970407"],["MB Bank","970422"],["ACB","970416"],["VPBank","970432"],
+  ["TPBank","970423"],["Sacombank","970403"],["VIB","970441"],["HDBank","970437"],
+  ["SHB","970443"],["MSB","970426"],["OCB","970448"],["SeABank","970440"],
+  ["LPBank","970449"],["Eximbank","970431"],["Nam A Bank","970428"],["BVBank / Timo","970454"],["Cake by VPBank","546034"]
+];
+const WEEKDAYS = ["Chủ nhật","Thứ hai","Thứ ba","Thứ tư","Thứ năm","Thứ sáu","Thứ bảy"];
+
+/* ---------- helpers ---------- */
+const $ = (s, r=document) => r.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money = n => (Math.round(n)||0).toLocaleString("vi-VN") + "đ";
+const ascii = s => String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/đ/g,"d").replace(/Đ/g,"D").replace(/[^A-Za-z0-9 ]/g," ").replace(/\s+/g," ").trim().toUpperCase();
+function vnNow(){
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-CA",{timeZone:TZ,year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date()).map(x=>[x.type,x.value]));
+  return { key:`${p.year}-${p.month}-${p.day}`, mins:(+p.hour)*60+(+p.minute), y:+p.year, m:+p.month, d:+p.day };
+}
+function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove("show"),2800); }
+async function copy(text){
+  try{ await navigator.clipboard.writeText(text); toast("Đã sao chép"); return; }catch(e){}
+  const ta=document.createElement("textarea"); ta.value=text; ta.style.position="fixed"; ta.style.opacity="0"; document.body.appendChild(ta); ta.select();
+  try{ document.execCommand("copy"); toast("Đã sao chép"); }catch(e){ toast("Không sao chép được, hãy sao chép thủ công"); }
+  ta.remove();
+}
+const parseHM = s => { const m=/^(\d{1,2}):(\d{2})$/.exec(s||""); return m ? (+m[1])*60+(+m[2]) : 630; };
+const uidShort = () => Math.random().toString(36).slice(2,8);
+
+/* VietQR (chuẩn NAPAS / EMVCo) */
+const tlv = (id,v) => id+String(v.length).padStart(2,"0")+v;
+function crc16(s){ let c=0xFFFF; for(let i=0;i<s.length;i++){ c^=s.charCodeAt(i)<<8; for(let j=0;j<8;j++) c=(c&0x8000)?((c<<1)^0x1021)&0xFFFF:(c<<1)&0xFFFF; } return c.toString(16).toUpperCase().padStart(4,"0"); }
+function vietqr(bin,acc,amount,info){
+  const m=tlv("00","A000000727")+tlv("01",tlv("00",bin)+tlv("01",acc))+tlv("02","QRIBFTTA");
+  const p=tlv("00","01")+tlv("01",amount?"12":"11")+tlv("38",m)+tlv("53","704")+(amount?tlv("54",String(Math.round(amount))):"")+tlv("58","VN")+(info?tlv("62",tlv("08",info.slice(0,25))):"")+"6304";
+  return p+crc16(p);
+}
+function qrSvg(text){
+  if(typeof window.qrcode!=="function") return null;
+  try{ const q=window.qrcode(0,"M"); q.addData(text); q.make(); return q.createSvgTag({cellSize:4,margin:0,scalable:true}); }catch(e){ return null; }
+}
+
+/* Đọc menu dạng chữ: "Cơm gà 35k", "Cơm sườn 40.000" */
+function parseMenuText(text){
+  const out=[];
+  for(let line of String(text||"").split(/\n+/)){
+    line=line.replace(/^[\s\-•*\d.)]+(?=\D)/,"").trim(); if(!line) continue;
+    const m=/^(.*?)[\s:\-–—.…]*?(\d{1,3}(?:[.,]\d{3})+|\d+)\s*(k|K|nghìn|ngàn|đ|d|vnđ|vnd|VND|VNĐ)?\s*$/.exec(line);
+    if(!m||!m[1].trim()) continue;
+    let n=+m[2].replace(/[.,]/g,""); if(/^k$/i.test(m[3]||"")||/ngh|ngà/.test(m[3]||"")||n<1000) n*=1000;
+    out.push({id:uidShort(),name:m[1].trim().replace(/[:\-–—.]+$/,"").trim(),price:n});
+  }
+  return out;
+}
+
+/* Nén ảnh menu thành JPEG nhỏ để lưu trong Firestore (giới hạn 1 MB/tài liệu) */
+function compressImage(file, maxSide=1280, quality=0.7){
+  return new Promise((res,rej)=>{
+    const img=new Image(), url=URL.createObjectURL(file);
+    img.onload=()=>{
+      const k=Math.min(1,maxSide/Math.max(img.width,img.height));
+      const c=document.createElement("canvas"); c.width=Math.round(img.width*k); c.height=Math.round(img.height*k);
+      c.getContext("2d").drawImage(img,0,0,c.width,c.height); URL.revokeObjectURL(url);
+      res(c.toDataURL("image/jpeg",quality));
+    };
+    img.onerror=()=>{ URL.revokeObjectURL(url); rej(new Error("Ảnh không đọc được")); };
+    img.src=url;
+  });
+}
+
+/* ---------- Firebase ---------- */
+const configured = !/DAN_API_KEY/.test(firebaseConfig.apiKey);
+let app, auth, fs;
+if(configured){ app=initializeApp(firebaseConfig); auth=getAuth(app); fs=getFirestore(app); }
+
+/* ---------- state ---------- */
+const S = {
+  today: vnNow(), tab:"order", authUser:null, authReady:false,
+  uid:null, myName:"", isAdmin:false,
+  settings:null, menu:null, orders:{}, loaded:{menu:false,orders:false},
+  cart:{}, note:"", cartDirty:false,
+  draft:null, draftDirty:false, setDraft:null, setDirty:false, busy:false
+};
+const dayKey = () => S.today.key;
+const myDay = () => S.orders[S.uid]?.days?.[dayKey()] || null;
+const deadlineMins = () => parseHM(S.settings?.deadline || "10:30");
+function isLocked(){
+  const st=S.menu?.status||"auto";
+  if(st==="open") return false;
+  if(st==="closed") return true;
+  return vnNow().mins >= deadlineMins();
+}
+function todayOrders(){
+  const k=dayKey(), list=[];
+  for(const [uid,d] of Object.entries(S.orders)){ const x=d?.days?.[k]; if(x && x.items?.length) list.push({uid,name:d.name,...x}); }
+  return list;
+}
+
+/* ---------- header ---------- */
+function renderHeader(){
+  const t=S.today, wd=new Date(Date.UTC(t.y,t.m-1,t.d)).getUTCDay();
+  $("#weekday").textContent=WEEKDAYS[wd];
+  $("#date").textContent=`${String(t.d).padStart(2,"0")}/${String(t.m).padStart(2,"0")}`;
+  const clock=$("#clock"), txt=$("#clockText"), dl=S.settings?.deadline||"10:30";
+  clock.hidden=!S.authUser;
+  if(!S.loaded.menu){ txt.textContent="Đang tải…"; return; }
+  if(!S.menu){ clock.classList.add("closed"); txt.textContent="Hôm nay chưa có menu"; return; }
+  if(isLocked()){ clock.classList.add("closed"); txt.textContent=`Đã chốt đơn (hạn ${dl})`; return; }
+  clock.classList.remove("closed");
+  const left=deadlineMins()-vnNow().mins;
+  if((S.menu.status||"auto")==="open" && left<=0){ txt.textContent="Admin đang mở thêm giờ đặt món"; return; }
+  const h=Math.floor(left/60), m=left%60;
+  txt.textContent=`Còn ${h?h+" giờ ":""}${m} phút để chọn món, chốt lúc ${dl}`;
+}
+setInterval(()=>{
+  const n=vnNow();
+  if(n.key!==S.today.key){ S.today=n; subscribeMenu(); S.cart={}; S.note=""; S.cartDirty=false; }
+  const was=S._locked; S._locked=isLocked(); renderHeader();
+  if(was!==S._locked && S.tab==="order") safeRender();
+},30000);
+
+/* ---------- render plumbing ---------- */
+let pending=false;
+const editing = () => { const a=document.activeElement; return a && $("#view").contains(a) && /INPUT|TEXTAREA|SELECT/.test(a.tagName); };
+function safeRender(){ if(editing()){ pending=true; return; } render(); }
+$("#view").addEventListener("focusout",()=>{ if(pending) setTimeout(()=>{ if(!editing()){ pending=false; render(); } },0); });
+
+function render(){
+  renderHeader();
+  const v=$("#view");
+  $("#who").hidden=!S.authUser; $("#tabs").hidden=!S.authUser;
+  if(!configured){ v.innerHTML=`<div class="empty"><h2>Chưa cấu hình Firebase</h2><p>Mở file <b>config.js</b>, dán cấu hình Firebase và email admin, rồi tải lại trang. Xem hướng dẫn trong README.md.</p></div>`; $("#bar").hidden=true; return; }
+  if(!S.authReady){ v.innerHTML=`<p class="hint">Đang tải…</p>`; return; }
+  if(!S.authUser){ v.innerHTML=signInView(); $("#bar").hidden=true; return; }
+  $("#whoName").textContent=`${S.myName}${S.isAdmin?" (admin)":""}`;
+  document.querySelectorAll(".tab").forEach(b=>b.setAttribute("aria-selected", String(b.dataset.tab===S.tab)));
+  $("#adminTab").hidden=!S.isAdmin;
+  if(S.tab==="order") v.innerHTML=orderView();
+  else if(S.tab==="summary") v.innerHTML=summaryView();
+  else v.innerHTML=adminView();
+  updateBar();
+}
+$("#tabs").addEventListener("click",e=>{
+  const b=e.target.closest(".tab"); if(!b) return;
+  S.tab=b.dataset.tab; pending=false; render(); window.scrollTo({top:0});
+});
+
+function signInView(){
+  return `<div class="empty"><h2>Đăng nhập để đặt cơm</h2><p>Dùng tài khoản Google${ALLOWED_DOMAIN?` có đuôi @${esc(ALLOWED_DOMAIN)}`:""} để chọn món và nhận mã QR chuyển khoản.</p><button class="btn" data-act="signIn">Đăng nhập bằng Google</button></div>`;
+}
+
+/* ---------- order tab ---------- */
+function orderView(){
+  if(!S.loaded.menu||!S.loaded.orders) return `<p class="hint">Đang tải menu…</p>`;
+  if(!S.menu || !(S.menu.items||[]).length){
+    return `<div class="empty"><h2>Hôm nay chưa có menu</h2><p>${S.isAdmin?"Đăng menu để mọi người bắt đầu chọn món.":"Admin chưa đăng menu. Quay lại sau nhé."}</p>${S.isAdmin?`<button class="btn" data-act="goAdmin">Đăng menu hôm nay</button>`:""}</div>`;
+  }
+  const locked=isLocked() && !S.isAdmin, saved=myDay();
+  if(!S.cartDirty){ S.cart={}; (saved?.items||[]).forEach(i=>S.cart[i.id]=i.qty); S.note=saved?.note||""; }
+  let h="";
+  if(saved && saved.items?.length) h+=ticketView(saved);
+  const imgs=S.menu.images||[];
+  h+=`<h2>${saved?"Đổi món":"Menu hôm nay"}</h2>`;
+  if(S.menu.note) h+=`<p class="note">${esc(S.menu.note)}</p>`;
+  if(imgs.length) h+=`<details class="photos"><summary>Xem ảnh menu (${imgs.length})</summary>${imgs.filter(u=>/^data:image\//.test(u)).map(u=>`<img src="${esc(u)}" alt="Ảnh menu" loading="lazy">`).join("")}</details>`;
+  h+=`<ul class="menu">`;
+  for(const it of S.menu.items){
+    const q=S.cart[it.id]||0;
+    h+=`<li class="item${q?" on":""}" data-id="${esc(it.id)}">
+      <div class="item-name"><span>${esc(it.name)}</span></div>
+      <div class="stepper" aria-label="Số lượng ${esc(it.name)}">
+        <button data-act="dec" aria-label="Bớt" ${(!q||locked)?"disabled":""}>−</button>
+        <output class="num">${q}</output>
+        <button data-act="inc" aria-label="Thêm" ${locked?"disabled":""}>+</button>
+      </div>
+      <div class="price num">${money(it.price)}</div>
+    </li>`;
+  }
+  h+=`</ul>`;
+  h+=`<label class="field" for="note">Ghi chú cho quán</label><textarea id="note" placeholder="Ít cơm, không hành, thêm canh…" ${locked?"disabled":""}>${esc(S.note)}</textarea>`;
+  if(locked) h+=`<p class="note">Đã chốt đơn. Cần đổi món, hãy nhắn admin.</p>`;
+  return h;
+}
+function ticketView(d){
+  const st=S.settings||{}, bank=BANKS.find(b=>b[1]===st.bankBin);
+  const info=ascii(`COM ${dayKey().slice(8,10)}${dayKey().slice(5,7)} ${S.myName}`).slice(0,25);
+  let qr;
+  if(st.bankBin && st.accountNo){
+    const svg=qrSvg(vietqr(st.bankBin,st.accountNo,d.total,info));
+    qr=`<div class="qr">
+      <div class="qr-box">${svg||`<p style="color:#333;font-size:13px">Không tạo được mã QR. Hãy chuyển khoản theo thông tin bên cạnh.</p>`}</div>
+      <dl>
+        <dt>Số tiền</dt><dd class="amount num">${money(d.total)}</dd>
+        <dt>Ngân hàng</dt><dd>${esc(bank?bank[0]:st.bankBin)}</dd>
+        <dt>Số tài khoản</dt><dd class="num">${esc(st.accountNo)} <button class="btn link small" data-act="copyAcc">Sao chép</button></dd>
+        ${st.accountName?`<dt>Chủ tài khoản</dt><dd>${esc(st.accountName)}</dd>`:""}
+        <dt>Nội dung</dt><dd>${esc(info)}</dd>
+      </dl>
+    </div>`;
+  } else qr=`<p class="note">Admin chưa nhập tài khoản nhận tiền nên chưa có mã QR.</p>`;
+  const status = d.paid ? `<span class="chip">Admin đã nhận tiền</span>` : d.paidClaim ? `<span class="chip wait">Đã báo chuyển, chờ admin xác nhận</span>` : `<button class="btn small" data-act="claimPaid">Tôi đã chuyển khoản</button>`;
+  return `<h2>Đơn của bạn</h2><div class="ticket">
+    <h3>Đã đặt ${d.items.reduce((a,i)=>a+i.qty,0)} phần</h3>
+    <ul>${d.items.map(i=>`<li>${i.qty} × ${esc(i.name)} <span class="price num">(${money(i.price*i.qty)})</span></li>`).join("")}</ul>
+    ${d.note?`<p class="hint">Ghi chú: ${esc(d.note)}</p>`:""}
+    <div class="row">${status}${(!isLocked()||S.isAdmin)?`<button class="btn link small" data-act="cancel">Huỷ đơn</button>`:""}</div>
+    ${qr}
+  </div>`;
+}
+function cartTotals(){ let n=0,t=0; for(const it of (S.menu?.items||[])){ const q=S.cart[it.id]||0; n+=q; t+=q*it.price; } return {n,t}; }
+function updateBar(){
+  const bar=$("#bar");
+  if(!S.authUser||S.tab!=="order"||!S.menu||!(S.menu.items||[]).length){ bar.hidden=true; return; }
+  const {n,t}=cartTotals(), saved=myDay(), locked=isLocked()&&!S.isAdmin;
+  bar.hidden=false;
+  $("#barTotal").textContent=money(t);
+  $("#barSub").textContent=n?`${n} phần`:"Chưa chọn món";
+  const btn=$("#barBtn");
+  btn.textContent = saved ? (S.cartDirty?"Lưu thay đổi":"Đã đặt") : "Đặt món";
+  btn.disabled = locked || !n || (saved && !S.cartDirty) || S.busy;
+}
+function updateItemRow(id){
+  const li=document.querySelector(`.item[data-id="${CSS.escape(id)}"]`); if(!li) return;
+  const q=S.cart[id]||0; li.classList.toggle("on",q>0); li.querySelector("output").textContent=q;
+  li.querySelector('[data-act="dec"]').disabled=!q;
+}
+
+/* ---------- summary tab ---------- */
+function aggregate(){
+  const list=todayOrders(), byDish={}; let portions=0,total=0,paid=0;
+  for(const o of list){
+    for(const i of o.items){ byDish[i.name]=byDish[i.name]||{name:i.name,price:i.price,qty:0}; byDish[i.name].qty+=i.qty; portions+=i.qty; }
+    total+=o.total; if(o.paid) paid+=o.total;
+  }
+  return {list,dishes:Object.values(byDish).sort((a,b)=>b.qty-a.qty),portions,total,paid};
+}
+function summaryView(){
+  if(!S.loaded.orders) return `<p class="hint">Đang tải…</p>`;
+  const a=aggregate();
+  if(!a.list.length) return `<div class="empty"><h2>Chưa có ai đặt món hôm nay</h2><p>Đơn sẽ hiện ở đây ngay khi có người chọn món.</p>${S.isAdmin?`<button class="btn ghost" data-act="copyRemind">Sao chép tin nhắc mọi người</button>`:""}</div>`;
+  let h=`<div class="stats"><div class="stat"><b class="num">${a.portions}</b><span>phần</span></div><div class="stat"><b class="num">${a.list.length}</b><span>người</span></div><div class="stat"><b class="num">${money(a.total)}</b><span>tổng tiền</span></div></div>`;
+  h+=`<div class="row" style="margin-bottom:6px"><button class="btn" data-act="csv">Tải file cho quán</button><button class="btn ghost" data-act="copyStore">Sao chép tin gửi quán</button></div>`;
+  h+=`<h2>Theo món</h2><div class="tbl-wrap"><table><thead><tr><th>Món</th><th class="r">SL</th><th class="r">Đơn giá</th><th class="r">Thành tiền</th></tr></thead><tbody>`;
+  for(const d of a.dishes) h+=`<tr><td>${esc(d.name)}</td><td class="r num"><b>${d.qty}</b></td><td class="r num">${money(d.price)}</td><td class="r num">${money(d.price*d.qty)}</td></tr>`;
+  h+=`</tbody></table></div><h2>Theo người</h2><p class="hint">Đã thu ${money(a.paid)} / ${money(a.total)}</p><ul class="people">`;
+  for(const o of a.list.sort((x,y)=>(x.at||0)-(y.at||0))){
+    const chip = o.paid?`<span class="chip">Đã nhận</span>`:o.paidClaim?`<span class="chip wait">Báo đã chuyển</span>`:`<span class="chip no">Chưa trả</span>`;
+    h+=`<li class="person"><b>${esc(o.name||"Đồng nghiệp")}</b><span class="r num"><b>${money(o.total)}</b></span>
+      <small>${o.items.map(i=>`${i.qty} ${esc(i.name)}`).join(", ")}${o.note?`. Ghi chú: ${esc(o.note)}`:""}</small>
+      <span class="r">${S.isAdmin?`<button class="btn ghost small" data-act="togglePaid" data-uid="${esc(o.uid)}">${o.paid?"Bỏ xác nhận":"Xác nhận đã nhận"}</button>`:chip}</span>
+      ${S.isAdmin?`<small>${chip}</small>`:""}
+    </li>`;
+  }
+  return h+`</ul>`;
+}
+function storeMessage(){
+  const a=aggregate(), t=S.today;
+  let s=`Chào quán, văn phòng đặt cơm trưa ngày ${String(t.d).padStart(2,"0")}/${String(t.m).padStart(2,"0")}:\n`;
+  for(const d of a.dishes) s+=`- ${d.name}: ${d.qty} phần\n`;
+  s+=`Tổng cộng: ${a.portions} phần (${money(a.total)}).`;
+  const notes=a.list.filter(o=>o.note).map(o=>`- ${o.items.map(i=>`${i.qty} ${i.name}`).join(", ")}: ${o.note}`);
+  if(notes.length) s+=`\nGhi chú:\n${notes.join("\n")}`;
+  return s;
+}
+function csvText(){
+  const a=aggregate(), q=v=>`"${String(v).replace(/"/g,'""')}"`;
+  const rows=[["Tổng hợp đặt cơm ngày",dayKey()],[],["Món","Số lượng","Đơn giá","Thành tiền"]];
+  a.dishes.forEach(d=>rows.push([d.name,d.qty,d.price,d.qty*d.price]));
+  rows.push(["Tổng",a.portions,"",a.total],[],["Người đặt","Món","Ghi chú","Tiền","Thanh toán"]);
+  a.list.forEach(o=>rows.push([o.name||"",o.items.map(i=>`${i.qty} ${i.name}`).join("; "),o.note||"",o.total,o.paid?"Đã nhận":o.paidClaim?"Báo đã chuyển":"Chưa trả"]));
+  return "\uFEFF"+rows.map(r=>r.map(q).join(",")).join("\r\n");
+}
+function downloadCsv(){
+  const blob=new Blob([csvText()],{type:"text/csv;charset=utf-8"}), url=URL.createObjectURL(blob);
+  const a=document.createElement("a"); a.href=url; a.download=`dat-com-${dayKey()}.csv`; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+const remindMessage = () => `🍱 Menu cơm trưa hôm nay đã có! Mọi người vào chọn món trước ${S.settings?.deadline||"10:30"} nhé.\n${location.origin+location.pathname}`;
+
+/* ---------- admin tab ---------- */
+function adminView(){
+  if(!S.isAdmin) return `<p class="hint">Chỉ admin mới vào được mục này.</p>`;
+  if(!S.draftDirty) S.draft={ items:(S.menu?.items||[]).map(i=>({...i})), note:S.menu?.note||"", images:[...(S.menu?.images||[])] };
+  if(!S.setDirty) S.setDraft={ bankBin:S.settings?.bankBin||"", accountNo:S.settings?.accountNo||"", accountName:S.settings?.accountName||"", deadline:S.settings?.deadline||"10:30" };
+  const d=S.draft, st=S.menu?.status||"auto", sd=S.setDraft;
+  let h=`<h2>Menu hôm nay</h2><p class="hint">Dán menu dạng chữ (mỗi món một dòng, có giá) rồi bấm Đọc menu. Có thể đính kèm ảnh menu để mọi người xem.</p>`;
+  h+=`<label class="field" for="menuText">Menu dạng chữ</label><textarea id="menuText" placeholder="Cơm gà xối mỡ 35k&#10;Cơm sườn bì chả 40.000&#10;Bún bò 45k"></textarea>`;
+  h+=`<div class="row" style="margin-top:10px"><button class="btn ghost" data-act="parse">Đọc menu</button></div>`;
+  h+=`<div class="drop" style="margin-top:16px"><label class="btn ghost" for="imgIn" style="cursor:pointer">Đính kèm ảnh menu</label><input id="imgIn" type="file" accept="image/*" multiple hidden>
+    <div class="thumbs">${d.images.map((u,i)=>`<img src="${esc(u)}" alt="Ảnh ${i+1}">`).join("")}</div>
+    ${d.images.length?`<button class="btn link small" data-act="clearImgs">Xoá ảnh</button>`:""}</div>`;
+  h+=`<h2>Danh sách món</h2>`;
+  if(!d.items.length) h+=`<p class="hint">Chưa có món nào. Đọc menu ở trên hoặc thêm tay.</p>`;
+  d.items.forEach((it,i)=>{ h+=`<div class="edit-row" data-i="${i}"><input type="text" data-f="name" value="${esc(it.name)}" placeholder="Tên món" aria-label="Tên món"><input type="number" data-f="price" value="${esc(it.price)}" min="0" step="1000" placeholder="Giá" aria-label="Giá"><button class="icon-btn" data-act="delRow" aria-label="Xoá món">×</button></div>`; });
+  h+=`<button class="btn link" data-act="addRow">+ Thêm món</button>`;
+  h+=`<label class="field" for="menuNote">Lời nhắn kèm menu (không bắt buộc)</label><input type="text" id="menuNote" value="${esc(d.note)}" placeholder="Hôm nay quán có thêm canh chua miễn phí">`;
+  h+=`<div class="row" style="margin-top:16px"><button class="btn" data-act="publishMenu" ${S.busy?"disabled":""}>${S.menu?"Cập nhật menu":"Đăng menu"}</button>${S.menu?`<button class="btn ghost" data-act="copyRemind">Sao chép tin nhắc</button>`:""}</div>`;
+  if(S.menu) h+=`<h2>Nhận đơn</h2><div class="seg" role="group" aria-label="Trạng thái nhận đơn">
+      <button data-act="status" data-v="auto" aria-pressed="${st==="auto"}">Tự chốt lúc ${esc(S.settings?.deadline||"10:30")}</button>
+      <button data-act="status" data-v="open" aria-pressed="${st==="open"}">Mở thêm giờ</button>
+      <button data-act="status" data-v="closed" aria-pressed="${st==="closed"}">Chốt ngay</button></div>`;
+  h+=`<h2>Tài khoản nhận tiền</h2><p class="hint">Dùng để tạo mã VietQR có sẵn số tiền cho từng người.</p>
+    <label class="field" for="bank">Ngân hàng</label>
+    <select id="bank" data-s="bankBin"><option value="">Chọn ngân hàng</option>${BANKS.map(b=>`<option value="${b[1]}" ${b[1]===sd.bankBin?"selected":""}>${esc(b[0])}</option>`).join("")}</select>
+    <label class="field" for="acc">Số tài khoản</label><input id="acc" type="text" inputmode="numeric" data-s="accountNo" value="${esc(sd.accountNo)}">
+    <label class="field" for="accName">Tên chủ tài khoản</label><input id="accName" type="text" data-s="accountName" value="${esc(sd.accountName)}" placeholder="NGUYEN VAN A">
+    <label class="field" for="dl">Giờ chốt đơn mỗi ngày</label><input id="dl" type="time" data-s="deadline" value="${esc(sd.deadline)}">
+    <div class="row" style="margin-top:16px"><button class="btn" data-act="saveSettings">Lưu cài đặt</button></div>`;
+  return h;
+}
+
+/* ---------- events ---------- */
+$("#view").addEventListener("input",e=>{
+  const t=e.target;
+  if(t.id==="note"){ S.note=t.value; S.cartDirty=true; updateBar(); }
+  if(t.closest(".edit-row")){ const i=+t.closest(".edit-row").dataset.i, f=t.dataset.f; S.draft.items[i][f]= f==="price"?(+t.value||0):t.value; S.draftDirty=true; }
+  if(t.id==="menuNote"){ S.draft.note=t.value; S.draftDirty=true; }
+  if(t.dataset.s){ S.setDraft[t.dataset.s]=t.value.trim(); S.setDirty=true; }
+});
+$("#view").addEventListener("change",async e=>{
+  const t=e.target;
+  if(t.dataset.s){ S.setDraft[t.dataset.s]=t.value.trim(); S.setDirty=true; }
+  if(t.id==="imgIn"){
+    try{
+      for(const f of [...t.files].slice(0,3)){ S.draft.images.push(await compressImage(f)); }
+      S.draft.images=S.draft.images.slice(-3);
+      if(JSON.stringify(S.draft.images).length>850000){ S.draft.images=S.draft.images.slice(-1); toast("Ảnh quá nặng, chỉ giữ ảnh cuối cùng"); }
+      S.draftDirty=true;
+    }catch(err){ toast("Không đọc được ảnh này"); }
+    t.value=""; render();
+  }
+});
+$("#view").addEventListener("click",async e=>{
+  const b=e.target.closest("[data-act]"); if(!b) return;
+  const act=b.dataset.act;
+  try{
+    if(act==="inc"||act==="dec"){ const id=b.closest(".item").dataset.id; S.cart[id]=Math.max(0,(S.cart[id]||0)+(act==="inc"?1:-1)); S.cartDirty=true; updateItemRow(id); updateBar(); }
+    else if(act==="signIn"){ await doSignIn(); }
+    else if(act==="goAdmin"){ S.tab="admin"; render(); }
+    else if(act==="claimPaid"){ await saveMine(d=>({...d,paidClaim:true})); toast("Đã báo admin là bạn đã chuyển khoản"); }
+    else if(act==="cancel"){ if(confirm("Huỷ đơn hôm nay?")){ await saveMine(()=>null); S.cartDirty=false; toast("Đã huỷ đơn"); } }
+    else if(act==="copyAcc"){ copy(S.settings?.accountNo||""); }
+    else if(act==="csv"){ downloadCsv(); }
+    else if(act==="copyStore"){ copy(storeMessage()); }
+    else if(act==="copyRemind"){ copy(remindMessage()); }
+    else if(act==="togglePaid"){ const uid=b.dataset.uid, cur=S.orders[uid]?.days?.[dayKey()]; if(cur) await setDoc(doc(fs,"orders",uid),{days:{[dayKey()]:{paid:!cur.paid}}},{merge:true}); }
+    else if(act==="addRow"){ S.draft.items.push({id:uidShort(),name:"",price:0}); S.draftDirty=true; render(); const r=document.querySelectorAll('.edit-row input[data-f="name"]'); r[r.length-1]?.focus(); }
+    else if(act==="delRow"){ S.draft.items.splice(+b.closest(".edit-row").dataset.i,1); S.draftDirty=true; render(); }
+    else if(act==="clearImgs"){ S.draft.images=[]; S.draftDirty=true; render(); }
+    else if(act==="parse"){ const items=parseMenuText($("#menuText").value); if(items.length){ S.draft.items=items; S.draftDirty=true; toast(`Đọc được ${items.length} món. Kiểm tra lại trước khi đăng.`); render(); } else toast("Không tìm thấy món có giá. Mỗi dòng cần có tên món và giá."); }
+    else if(act==="publishMenu"){ await publishMenu(); }
+    else if(act==="status"){ await setDoc(doc(fs,"menus",dayKey()),{status:b.dataset.v},{merge:true}); toast(b.dataset.v==="closed"?"Đã chốt đơn":b.dataset.v==="open"?"Đã mở thêm giờ đặt món":"Sẽ tự chốt theo giờ"); }
+    else if(act==="saveSettings"){ await saveSettings(); }
+  }catch(err){ handleErr(err); }
+});
+$("#barBtn").addEventListener("click",async()=>{
+  const items=(S.menu?.items||[]).filter(i=>S.cart[i.id]>0).map(i=>({id:i.id,name:i.name,price:i.price,qty:S.cart[i.id]}));
+  if(!items.length) return;
+  const total=items.reduce((a,i)=>a+i.qty*i.price,0);
+  S.busy=true; updateBar();
+  try{
+    await saveMine(prev=>({items,note:S.note.trim(),total,at:Date.now(),paidClaim:false,paid:(prev?.paid && prev.total===total)||false}));
+    S.cartDirty=false; toast("Đã đặt món. Quét mã QR để chuyển khoản nhé"); render(); window.scrollTo({top:0,behavior:"smooth"});
+  }catch(err){ handleErr(err); }
+  S.busy=false; updateBar();
+});
+$("#signOut").addEventListener("click",()=>signOut(auth));
+function handleErr(err){
+  console.error(err);
+  if(err?.code==="permission-denied") toast("Bạn không có quyền thao tác này.");
+  else if(err?.code==="auth/popup-closed-by-user") {}
+  else toast("Chưa lưu được, kiểm tra mạng rồi thử lại.");
+}
+
+/* ---------- writes ---------- */
+async function saveMine(fn){
+  const cur=S.orders[S.uid]||{}, days={...(cur.days||{})};
+  const next=fn(days[dayKey()]||null);
+  if(next) days[dayKey()]=next; else delete days[dayKey()];
+  const cutoff=new Date(Date.now()-40*864e5).toISOString().slice(0,10);
+  for(const k of Object.keys(days)) if(k<cutoff) delete days[k];
+  await setDoc(doc(fs,"orders",S.uid),{name:S.myName,email:S.authUser.email||"",days});
+}
+async function publishMenu(){
+  const items=S.draft.items.map(i=>({id:i.id||uidShort(),name:String(i.name||"").trim(),price:Math.max(0,Math.round(+i.price||0))})).filter(i=>i.name);
+  if(!items.length){ toast("Thêm ít nhất một món có tên"); return; }
+  S.busy=true; render();
+  try{
+    await setDoc(doc(fs,"menus",dayKey()),{date:dayKey(),items,note:S.draft.note.trim(),images:S.draft.images,status:S.menu?.status||"auto",postedAt:Date.now()});
+    S.draftDirty=false; toast(S.menu?"Đã cập nhật menu":"Đã đăng menu");
+  }catch(err){ handleErr(err); }
+  S.busy=false; render();
+}
+async function saveSettings(){
+  const sd=S.setDraft;
+  if(sd.accountNo && !/^\d{4,19}$/.test(sd.accountNo)){ toast("Số tài khoản chỉ gồm chữ số"); return; }
+  await setDoc(doc(fs,"config","settings"),{...sd,accountName:ascii(sd.accountName)});
+  S.setDirty=false; toast("Đã lưu cài đặt");
+}
+
+/* ---------- auth & data ---------- */
+async function doSignIn(){
+  const p=new GoogleAuthProvider(); p.setCustomParameters({prompt:"select_account"});
+  try{ await signInWithPopup(auth,p); }
+  catch(err){ if(/popup-blocked|operation-not-supported/.test(err?.code||"")) await signInWithRedirect(auth,p); else throw err; }
+}
+let unsubs=[], unsubMenu=null;
+function subscribeMenu(){
+  unsubMenu?.(); S.loaded.menu=false;
+  unsubMenu=onSnapshot(doc(fs,"menus",dayKey()),s=>{ S.menu=s.exists()?s.data():null; S.loaded.menu=true; S._locked=isLocked(); safeRender(); },err=>{ console.warn(err); S.loaded.menu=true; safeRender(); });
+}
+function startData(){
+  unsubs.push(onSnapshot(doc(fs,"config","settings"),s=>{ S.settings=s.exists()?s.data():null; safeRender(); },e=>console.warn(e)));
+  subscribeMenu();
+  unsubs.push(onSnapshot(collection(fs,"orders"),s=>{ const o={}; s.forEach(d=>o[d.id]=d.data()); S.orders=o; S.loaded.orders=true; safeRender(); },e=>{ console.warn(e); S.loaded.orders=true; safeRender(); }));
+}
+function stopData(){ unsubs.forEach(u=>u()); unsubs=[]; unsubMenu?.(); unsubMenu=null; S.orders={}; S.menu=null; S.settings=null; S.loaded={menu:false,orders:false}; }
+
+if(configured){
+  getRedirectResult(auth).catch(err=>console.warn(err));
+  onAuthStateChanged(auth,async u=>{
+    if(u && ALLOWED_DOMAIN && !(u.email||"").toLowerCase().endsWith("@"+ALLOWED_DOMAIN.toLowerCase())){
+      toast(`Chỉ dùng được email @${ALLOWED_DOMAIN}`); await signOut(auth); return;
+    }
+    S.authReady=true; S.authUser=u||null;
+    stopData();
+    if(u){
+      S.uid=u.uid; S.myName=u.displayName||u.email||"Bạn";
+      S.isAdmin=ADMIN_EMAILS.map(x=>x.toLowerCase()).includes((u.email||"").toLowerCase());
+      startData();
+    }
+    render();
+  });
+}
+render();
