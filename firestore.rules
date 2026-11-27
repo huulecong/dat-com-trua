@@ -2,39 +2,130 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ---------- Cấu hình ----------
+    // Chỉ cho email thuộc tên miền này dùng app, ví dụ 'congty.vn'.
+    // Để '' nếu mọi tài khoản Google đều được dùng. Phải trùng ALLOWED_DOMAIN trong config.js.
+    function allowedDomain() { return ''; }
+
+    // ---------- Hàm chung ----------
     function signedIn() { return request.auth != null; }
+    function email() { return request.auth.token.email.lower(); }
 
-    // Sửa danh sách email admin cho trùng với config.js
-    function isAdmin() {
+    // Chỉ chấp nhận tài khoản Google đã xác minh email (chặn tài khoản ẩn danh / email-password tự tạo bằng apiKey)
+    function isMember() {
       return signedIn()
+        && request.auth.token.firebase.sign_in_provider == 'google.com'
         && request.auth.token.email_verified == true
-        && request.auth.token.email.lower() in ['anhuynh14business@gmail.com'];
+        && (allowedDomain() == '' || email().split('@')[1] == allowedDomain());
     }
 
-    // Danh sách người đã đăng nhập (tên, email) để admin gửi email nhắc.
-    // Mỗi người chỉ ghi hồ sơ của mình, chỉ admin đọc được danh sách.
+    // Admin = có tài liệu admins/{email} (tạo bằng tay trong Firebase Console, không ai ghi được từ app)
+    function isAdmin() {
+      return isMember() && exists(/databases/$(database)/documents/admins/$(email()));
+    }
+
+    // Giờ Việt Nam theo đồng hồ server (không tin đồng hồ máy người dùng)
+    function vnTime() { return request.time + duration.value(7, 'h'); }
+    function pad2(n) { return n < 10 ? '0' + string(n) : string(n); }
+    function vnToday() {
+      let t = vnTime();
+      return string(t.year()) + '-' + pad2(t.month()) + '-' + pad2(t.day());
+    }
+    function deadlineMin() {
+      let p = /databases/$(database)/documents/config/settings;
+      return exists(p) ? get(p).data.get('deadlineMin', 630) : 630;
+    }
+
+    // Còn nhận đơn ngày {day} không: chỉ ngày hôm nay, đã có menu, chưa chốt
+    function orderOpen(day) {
+      let menuPath = /databases/$(database)/documents/menus/$(day);
+      let t = vnTime();
+      return day == vnToday()
+        && exists(menuPath)
+        && (get(menuPath).data.get('status', 'auto') == 'open'
+            || (get(menuPath).data.get('status', 'auto') == 'auto'
+                && t.hours() * 60 + t.minutes() < deadlineMin()));
+    }
+
+    // ---------- Collections ----------
+
+    // Danh sách admin: mỗi người chỉ đọc được tài liệu của chính mình (để app biết mình có phải admin không)
+    match /admins/{adminEmail} {
+      allow read: if signedIn() && adminEmail == email();
+      allow write: if false;
+    }
+
+    // Hồ sơ người dùng (tên, email) để admin gửi email nhắc. Chỉ admin đọc được.
     match /users/{uid} {
-      allow read: if isAdmin();
-      allow write: if signedIn() && request.auth.uid == uid
-        && request.resource.data.email == request.auth.token.email;
+      allow read, delete: if isAdmin();
+      allow create, update: if isMember() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['name', 'email', 'lastSeen'])
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.name is string && request.resource.data.name.size() <= 100
+        && request.resource.data.lastSeen is int;
     }
 
-    // Cài đặt tài khoản nhận tiền, giờ chốt: ai đăng nhập cũng đọc được, chỉ admin sửa
+    // Cài đặt (tài khoản nhận tiền, giờ chốt): thành viên đọc, admin sửa
     match /config/{id} {
-      allow read: if signedIn();
+      allow read: if isMember();
       allow write: if isAdmin();
     }
 
-    // Menu theo ngày: chỉ admin đăng / sửa
+    // Menu theo ngày (không chứa ảnh để tải nhanh)
     match /menus/{day} {
-      allow read: if signedIn();
+      allow read: if isMember();
       allow write: if isAdmin();
     }
 
-    // Đơn của từng người: mỗi người chỉ sửa đơn của mình, admin sửa được tất cả (xác nhận đã nhận tiền)
-    match /orders/{uid} {
-      allow read: if signedIn();
-      allow write: if signedIn() && (request.auth.uid == uid || isAdmin());
+    // Ảnh menu tách riêng, chỉ tải khi người dùng bấm xem
+    match /menuImages/{day} {
+      allow read: if isMember();
+      allow write: if isAdmin();
+    }
+
+    // Token thông báo đẩy (mỗi thiết bị một tài liệu, ID = token).
+    // App chỉ ghi/xoá token của chính mình; không ai đọc được từ app (n8n đọc bằng service account).
+    match /pushTokens/{token} {
+      allow read: if false;
+      allow create, update: if isMember()
+        && request.resource.data.keys().hasOnly(['uid', 'ua', 'updatedAt'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.ua is string && request.resource.data.ua.size() <= 200
+        && request.resource.data.updatedAt is int;  // máy đổi tài khoản thì token chuyển sang người mới
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    // Đơn theo ngày: days/{day}/orders/{uid}
+    match /days/{day}/orders/{uid} {
+      function valid() {
+        let d = request.resource.data;
+        return d.keys().hasOnly(['name', 'items', 'note', 'total', 'at', 'paidClaim', 'paid'])
+          && d.name is string && d.name.size() <= 100
+          && d.items is list && d.items.size() >= 1 && d.items.size() <= 30
+          && d.note is string && d.note.size() <= 300
+          && d.total is int && d.total >= 0 && d.total <= 10000000
+          && d.at is int
+          && d.paidClaim is bool && d.paid is bool;
+      }
+      // Người dùng không được tự đánh dấu "đã nhận tiền".
+      // Chỉ giữ lại paid=true do admin xác nhận trước đó khi tổng tiền không đổi.
+      function paidOk() {
+        return request.resource.data.paid == false
+          || (resource != null && resource.data.paid == true
+              && request.resource.data.total == resource.data.total);
+      }
+      // Sau giờ chốt vẫn được bấm "Tôi đã chuyển khoản"
+      function onlyPaidClaim() {
+        return resource != null
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paidClaim'])
+          && request.resource.data.paidClaim == true;
+      }
+      function mine() { return isMember() && request.auth.uid == uid; }
+
+      allow read: if isMember();
+      allow create: if isAdmin() || (mine() && valid() && paidOk() && orderOpen(day));
+      allow update: if isAdmin() || (mine() && valid() && paidOk() && (onlyPaidClaim() || orderOpen(day)));
+      allow delete: if isAdmin() || (mine() && orderOpen(day));
     }
   }
 }
