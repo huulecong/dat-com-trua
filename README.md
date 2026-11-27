@@ -36,8 +36,8 @@ firebase deploy --only firestore:rules,functions
 **Settings → Pages → Deploy from a branch → `main` / `(root)`**. Sau đó vào Firebase → **Authentication → Settings → Authorized domains** → thêm `<tên-github>.github.io`.
 
 ### 6. Bật thông báo đẩy
-1. Firebase → **Project settings → Cloud Messaging → Web Push certificates → Generate key pair** → dán vào `VAPID_KEY` trong `config.js`.
-2. Mọi người mở app → bấm **Bật thông báo**.
+1. Không cần cấu hình thêm: app dùng khoá Web Push mặc định của Firebase. (Muốn dùng khoá riêng thì tạo ở **Project settings → Cloud Messaging → Web Push certificates** và dán vào `VAPID_KEY`.)
+2. Mọi người mở app → bấm **Cho phép thông báo** trên banner, hoặc bấm **nút chuông** ở góc trên (chấm cam = chưa bật).
    - **iPhone (iOS 16.4 trở lên):** mở bằng Safari → nút **Chia sẻ** → **Thêm vào Màn hình chính** → mở app từ icon BonBon → bấm **Bật thông báo**. iPhone chỉ cho web gửi thông báo khi đã cài như vậy.
    - **Android / máy tính:** bấm **Bật thông báo** ngay trên trình duyệt (Chrome cũng có mục "Cài đặt ứng dụng").
 3. Admin đăng menu → mọi máy đã bật nhận thông báo trong vài giây. 15 phút trước giờ chốt, ai chưa đặt sẽ nhận thêm thông báo nhắc.

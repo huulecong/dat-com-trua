@@ -22,7 +22,7 @@ export const ALLOWED_DOMAIN = "";
 //    Dán site key reCAPTCHA v3 vào đây sau khi bật App Check (xem README). Để "" nếu chưa dùng.
 export const APP_CHECK_SITE_KEY = "";
 
-// 5) Thông báo đẩy về điện thoại khi admin đăng menu (xem README mục "Thông báo").
-//    Firebase Console → Project settings → Cloud Messaging → Web Push certificates → Generate key pair → dán "Key pair" vào đây.
-//    Để "" thì app ẩn nút bật thông báo.
+// 5) (Không bắt buộc) Khoá Web Push riêng cho thông báo đẩy.
+//    Để "" thì Firebase dùng khoá mặc định, thông báo vẫn chạy bình thường.
+//    Muốn dùng khoá riêng: Firebase Console → Project settings → Cloud Messaging → Web Push certificates → Generate key pair.
 export const VAPID_KEY = "";

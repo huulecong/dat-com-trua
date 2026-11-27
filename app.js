@@ -89,7 +89,7 @@ if(configured){
   try{ fs=initializeFirestore(app,{localCache:persistentLocalCache({tabManager:persistentMultipleTabManager()})}); }
   catch(e){ fs=getFirestore(app); }
 }
-const skeleton = () => `<div class="sk" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div><span class="sr">Đang tải</span>`;
+const skeleton = () => `<div class="sk" aria-hidden="true"><i></i><i></i><i></i><i></i></div><span class="sr">Đang tải</span>`;
 
 /* ---------- state ---------- */
 const S = {
@@ -124,13 +124,17 @@ function todayOrders(){
 }
 
 /* ---------- header ---------- */
+const firstName = () => (S.myName||"").trim().split(/\s+/).pop() || "bạn";
+const dateLabel = () => { const t=S.today, wd=new Date(Date.UTC(t.y,t.m-1,t.d)).getUTCDay(); return `${WEEKDAYS[wd]}, ${String(t.d).padStart(2,"0")}/${String(t.m).padStart(2,"0")}`; };
+function greeting(){ const h=Math.floor(vnNow().mins/60); return h<11?"Chào buổi sáng":h<14?"Chào buổi trưa":h<18?"Chào buổi chiều":"Chào buổi tối"; }
 function renderHeader(){
-  const t=S.today, wd=new Date(Date.UTC(t.y,t.m-1,t.d)).getUTCDay();
-  $("#date").textContent=`${WEEKDAYS[wd]}, ${String(t.d).padStart(2,"0")}/${String(t.m).padStart(2,"0")}`;
+  $("#helloSub").textContent = S.authUser ? `${greeting()} 👋` : "BonBon";
+  $("#whoName").textContent = S.authUser ? firstName() : "Cơm trưa";
+  $("#signOut").textContent = firstName().charAt(0).toUpperCase();
+  $("#bellDot").hidden = !["default","ios-install"].includes(pushState());
   const clock=$("#clock"), txt=$("#clockText"), dl=S.settings?.deadline||"10:30";
+  if(!clock || !txt) return;
   const set=(cls,text)=>{ clock.className="status"+(cls?" "+cls:""); txt.textContent=text; };
-  clock.hidden=!S.authUser || !S.loaded.menu;
-  if(clock.hidden) return;
   if(!S.menu) return set("","Chưa có menu");
   if(isLocked()) return set("",`Đã chốt lúc ${dl}`);
   const left=deadlineMins()-vnNow().mins;
@@ -158,13 +162,12 @@ function render(){
   if(!configured){ v.innerHTML=`<div class="empty"><h3>Chưa cấu hình Firebase</h3><p>Mở file config.js, dán cấu hình Firebase và email admin rồi tải lại trang. Hướng dẫn nằm trong README.md.</p></div>`; $("#bar").hidden=true; return; }
   if(!S.authReady){ v.innerHTML=skeleton(); return; }
   if(!S.authUser){ v.innerHTML=signInView(); $("#bar").hidden=true; return; }
-  $("#whoName").textContent=S.myName;
   document.querySelectorAll(".tab").forEach(b=>b.setAttribute("aria-selected", String(b.dataset.tab===S.tab)));
   $("#adminTab").hidden=!S.isAdmin;
   if(S.tab==="order") v.innerHTML=orderView();
   else if(S.tab==="summary") v.innerHTML=summaryView();
   else v.innerHTML=adminView();
-  updateBar();
+  updateBar(); renderHeader();
 }
 $("#tabs").addEventListener("click",e=>{
   const b=e.target.closest(".tab"); if(!b) return;
@@ -172,41 +175,57 @@ $("#tabs").addEventListener("click",e=>{
 });
 
 function signInView(){
-  return `<div class="empty"><h3>Đăng nhập để chọn món</h3><p>Dùng tài khoản Google${ALLOWED_DOMAIN?` @${esc(ALLOWED_DOMAIN)}`:""}. Đặt xong sẽ có mã QR để chuyển khoản.</p><button class="btn" data-act="signIn">Đăng nhập bằng Google</button></div>`;
+  return `<section class="signin">
+    <img src="icons/icon-512.png" alt="BonBon cơm trưa" width="132" height="132">
+    <h1>Cơm trưa BonBon</h1>
+    <p>Chọn món trong vài giây, quét QR là xong. Dùng tài khoản Google${ALLOWED_DOMAIN?` @${esc(ALLOWED_DOMAIN)}`:""}.</p>
+    <button class="gbtn press" data-act="signIn"><svg width="22" height="22" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>Tiếp tục với Google</button>
+    <div class="perks"><span><i>🍱</i>Chọn món</span><span><i>📲</i>Quét QR</span><span><i>🔔</i>Báo menu mới</span></div>
+  </section>`;
 }
+/* Emoji minh hoạ theo tên món */
+const DISH=[[/ gà | vịt /,"🍗"],[/ sườn | heo | thịt | ba chỉ | xá xíu | chả | giò /,"🍖"],[/ bò /,"🥩"],[/ cá /,"🐟"],[/ tôm | mực | hải sản | cua | nghêu /,"🦐"],[/ bún | phở | mì | miến | hủ tiếu | nui | bánh canh | cháo /,"🍜"],[/ chay | rau | salad | đậu | nấm /,"🥗"],[/ trứng /,"🍳"],[/ bánh mì /,"🥖"],[/ trà | nước | cà phê | sinh tố | chè | sữa /,"🧋"],[/ cơm /,"🍚"]];
+const dishEmoji = name => { const s=" "+String(name||"").toLowerCase().normalize("NFC").replace(/[^\p{L}\p{N}]+/gu,"  ")+" "; for(const [re,e] of DISH) if(re.test(s)) return e; return "🍱"; };
+const thumb = (name,i) => `<span class="thumb t${i%6}" aria-hidden="true">${dishEmoji(name)}</span>`;
 
 /* ---------- order tab ---------- */
 function orderView(){
   if(!S.loaded.menu||!S.loaded.orders) return skeleton();
+  const saved=myDay();
+  const hero = (title, art="🍱") => `<section class="hero"><span class="hero-art" aria-hidden="true">${art}</span>
+    <p class="hero-k">${esc(dateLabel())}</p><h1>${title}</h1>
+    <span class="status" id="clock"><span class="dot"></span><span id="clockText"></span></span></section>`;
   if(!S.menu || !(S.menu.items||[]).length){
-    return `<div class="empty"><h3>Hôm nay chưa có menu</h3><p>${S.isAdmin?"Đăng menu để mọi người bắt đầu chọn món.":"Menu chưa được đăng. Có menu là trang này tự cập nhật, không cần tải lại."}</p>${S.isAdmin?`<button class="btn" data-act="goAdmin">Đăng menu hôm nay</button>`:""}</div>${notifyPanel()}`;
+    return hero(`Menu hôm nay đang được chuẩn bị`,"⏳")
+      + `<div class="empty"><div class="art">🍳</div><h3>Chưa có menu</h3><p>${S.isAdmin?"Đăng menu để mọi người bắt đầu chọn món.":"Có menu là trang này tự cập nhật, không cần tải lại."}</p>${S.isAdmin?`<button class="btn press" data-act="goAdmin">Đăng menu hôm nay</button>`:""}</div>${notifyPanel()}`;
   }
-  const locked=isLocked() && !S.isAdmin, saved=myDay();
+  const locked=isLocked() && !S.isAdmin;
   if(!S.cartDirty){ S.cart={}; (saved?.items||[]).forEach(i=>S.cart[i.id]=i.qty); S.note=saved?.note||""; }
-  let h=notifyPanel();
+  let h=hero(saved?.items?.length ? `Ngon miệng nhé, ${esc(firstName())}!` : `Hôm nay ăn gì, ${esc(firstName())}?`, saved?.items?.length?"😋":"🍱");
+  if(S.menu.note) h+=`<p class="note"><span aria-hidden="true">📣</span><span>${esc(S.menu.note)}</span></p>`;
+  if(locked) h+=`<p class="note lock"><span aria-hidden="true">🔒</span><span>Đã chốt đơn. Muốn đổi món thì nhắn admin.</span></p>`;
+  h+=notifyPanel();
   if(saved && saved.items?.length) h+=ticketView(saved);
   const imgCount=S.menu.imageCount ?? (S.menu.images||[]).length;
-  h+=`<h2>${saved?"Đổi món":"Menu"}</h2>`;
-  if(S.menu.note) h+=`<p class="note">${esc(S.menu.note)}</p>`;
-  if(locked) h+=`<p class="note">Đã chốt đơn. Muốn đổi món thì nhắn admin.</p>`;
+  h+=`<div class="sec"><h2>${saved?"Đổi món":"Menu hôm nay"}</h2><span>${S.menu.items.length} món</span></div>`;
   h+=`<ul class="menu">`;
-  for(const it of S.menu.items){
+  S.menu.items.forEach((it,idx)=>{
     const q=S.cart[it.id]||0;
     h+=`<li class="item${q?" on":""}" data-id="${esc(it.id)}">
-      <button class="item-main" data-act="pick" ${locked?"disabled":""}><span class="item-name">${esc(it.name)}</span><span class="lead"></span><span class="price num">${money(it.price)}</span></button>
+      <button class="item-main" data-act="pick" ${locked?"disabled":""}>${thumb(it.name,idx)}<span class="item-txt"><span class="item-name">${esc(it.name)}</span><span class="price num">${money(it.price)}</span></span></button>
       <div class="ctrl" role="group" aria-label="Số lượng ${esc(it.name)}">
-        <button data-act="dec" aria-label="Bớt một" ${locked?"disabled":""}>−</button>
+        <button class="press" data-act="dec" aria-label="Bớt một" ${locked?"disabled":""}>−</button>
         <output class="num">${q}</output>
-        <button data-act="inc" aria-label="Thêm một" ${locked?"disabled":""}>+</button>
+        <button class="press" data-act="inc" aria-label="Thêm một" ${locked?"disabled":""}>+</button>
       </div>
     </li>`;
-  }
+  });
   h+=`</ul>`;
   if(imgCount){
     const imgs=currentImages();
-    h+=`<details class="photos" data-photos${S.photosOpen?" open":""}><summary>Xem ảnh menu gốc (${imgCount})</summary>${imgs?imgsHtml(imgs,"Ảnh menu"):`<p class="hint">Đang tải ảnh…</p>`}</details>`;
+    h+=`<details class="photos" data-photos${S.photosOpen?" open":""}><summary>🖼️ Xem ảnh menu gốc (${imgCount})</summary>${imgs?imgsHtml(imgs,"Ảnh menu"):`<p class="hint">Đang tải ảnh…</p>`}</details>`;
   }
-  h+=`<label class="field" for="note">Ghi chú cho quán</label><textarea id="note" rows="2" placeholder="Ít cơm, không hành…" ${locked?"disabled":""}>${esc(S.note)}</textarea>`;
+  h+=`<div class="sec"><h2>Ghi chú cho quán</h2></div><textarea id="note" rows="2" aria-label="Ghi chú cho quán" placeholder="Ít cơm, không hành…" ${locked?"disabled":""}>${esc(S.note)}</textarea>`;
   return h;
 }
 /* Ảnh menu: tách khỏi doc menu, chỉ tải khi cần (mở "Xem ảnh" hoặc vào tab Quản lý) */
@@ -246,13 +265,14 @@ function ticketView(d){
   }
   const status = d.paid ? `<span class="chip">Đã thanh toán</span>` : d.paidClaim ? `<span class="chip wait">Chờ admin xác nhận</span>` : `<span class="chip no">Chưa thanh toán</span>`;
   const n=d.items.reduce((a,i)=>a+i.qty,0);
-  const claim = (!d.paid && !d.paidClaim) ? `<button class="btn small" data-act="claimPaid">Tôi đã chuyển khoản</button>` : `<span></span>`;
+  const claim = (!d.paid && !d.paidClaim) ? `<button class="btn block press" data-act="claimPaid">✅ Tôi đã chuyển khoản</button>` : "";
+  const cancel = (!isLocked()||S.isAdmin) ? `<button class="link muted" data-act="cancel">Huỷ đơn</button>` : "";
   return `<section class="ticket" aria-label="Đơn của bạn">
     <div class="t-head"><div><p class="t-title">Đơn của bạn · ${n} phần</p><p class="t-total num">${money(d.total)}</p></div>${status}</div>
     <ul class="lines">${d.items.map(i=>`<li><span>${i.qty} × ${esc(i.name)}</span><span class="num">${money(i.price*i.qty)}</span></li>`).join("")}</ul>
-    ${d.note?`<p class="t-note">Ghi chú: ${esc(d.note)}</p>`:""}
+    ${d.note?`<p class="t-note">📝 ${esc(d.note)}</p>`:""}
     ${pay}
-    <div class="t-foot">${claim}${(!isLocked()||S.isAdmin)?`<button class="link" data-act="cancel">Huỷ đơn</button>`:""}</div>
+    ${claim||cancel?`<div class="t-foot">${claim}${cancel}</div>`:""}
   </section>`;
 }
 function cartTotals(){ let n=0,t=0; for(const it of (S.menu?.items||[])){ const q=S.cart[it.id]||0; n+=q; t+=q*it.price; } return {n,t}; }
@@ -261,6 +281,7 @@ function updateBar(){
   if(!S.authUser||S.tab!=="order"||!S.menu||!(S.menu.items||[]).length){ bar.hidden=true; return; }
   const {n,t}=cartTotals(), saved=myDay(), locked=isLocked()&&!S.isAdmin;
   bar.hidden=false;
+  $("#barCount").textContent=n; $("#barCount").hidden=!n;
   $("#barTotal").textContent=money(t);
   $("#barSub").textContent=n?`${n} phần`:"Chưa chọn món";
   const btn=$("#barBtn");
@@ -284,18 +305,20 @@ function aggregate(){
 function summaryView(){
   if(!S.loaded.orders) return skeleton();
   const a=aggregate();
-  if(!a.list.length) return `<div class="empty"><h3>Chưa ai đặt món</h3><p>Có người đặt là danh sách hiện ở đây.</p></div>${remindPanel()}`;
-  let h=remindPanel()+`<div class="stats"><div class="stat"><b class="num">${a.portions}</b><span>phần</span></div><div class="stat"><b class="num">${a.list.length}</b><span>người</span></div><div class="stat"><b class="num">${money(a.total)}</b><span>tổng</span></div></div>`;
-  h+=`<div class="row"><button class="btn" data-act="copyStore">Chép tin gửi quán</button><button class="btn ghost" data-act="csv">Tải file Excel</button></div>`;
-  h+=`<h2>Theo món</h2><div class="tbl-wrap"><table><thead><tr><th>Món</th><th class="r">SL</th><th class="r">Đơn giá</th><th class="r">Thành tiền</th></tr></thead><tbody>`;
-  for(const d of a.dishes) h+=`<tr><td>${esc(d.name)}</td><td class="r num"><b>${d.qty}</b></td><td class="r num">${money(d.price)}</td><td class="r num">${money(d.price*d.qty)}</td></tr>`;
-  h+=`</tbody></table></div><h2>Theo người</h2><p class="hint">Đã thu ${money(a.paid)} / ${money(a.total)}</p><ul class="people">`;
+  if(!a.list.length) return `<div class="empty"><div class="art">🧾</div><h3>Chưa ai đặt món</h3><p>Có người đặt là danh sách hiện ở đây.</p></div>${remindPanel()}`;
+  const pct=a.total?Math.round(a.paid/a.total*100):0;
+  let h=remindPanel()+`<div class="stats"><div class="stat hi"><b class="num">${a.portions}</b><span>phần cơm</span></div><div class="stat"><b class="num">${a.list.length}</b><span>người đặt</span></div><div class="stat"><b class="num">${money(a.total).replace(".000đ","k")}</b><span>tổng tiền</span></div></div>`;
+  h+=`<div class="row"><button class="btn press" data-act="copyStore">📋 Chép tin gửi quán</button><button class="btn ghost press" data-act="csv">⬇️ Excel</button></div>`;
+  h+=`<div class="sec"><h2>Theo món</h2><span>${a.dishes.length} món</span></div><ul class="dishes">`;
+  a.dishes.forEach((d,i)=>{ h+=`<li>${thumb(d.name,i)}<span class="nm">${esc(d.name)}<small class="num">${money(d.price)} · ${money(d.price*d.qty)}</small></span><span class="qty num">×${d.qty}</span></li>`; });
+  h+=`</ul><div class="sec"><h2>Theo người</h2><span class="num">Đã thu ${money(a.paid)} / ${money(a.total)}</span></div>
+    <div class="progress" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="Đã thu ${pct}%"><i style="width:${pct}%"></i></div><ul class="people" style="margin-top:12px">`;
   for(const o of a.list.sort((x,y)=>(x.at||0)-(y.at||0))){
     const chip = o.paid?`<span class="chip">Đã nhận</span>`:o.paidClaim?`<span class="chip wait">Báo đã chuyển</span>`:`<span class="chip no">Chưa trả</span>`;
-    h+=`<li class="person"><b>${esc(o.name||"Đồng nghiệp")}</b><span class="r num"><b>${money(o.total)}</b></span>
-      <small>${o.items.map(i=>`${i.qty} ${esc(i.name)}`).join(", ")}${o.note?`. Ghi chú: ${esc(o.note)}`:""}</small>
-      <span class="r">${S.isAdmin?`<button class="btn ${o.paid?"ghost ":""}small" data-act="togglePaid" data-uid="${esc(o.uid)}">${o.paid?"Bỏ xác nhận":"Đã nhận tiền"}</button>`:chip}</span>
-      ${S.isAdmin?`<small>${chip}</small>`:""}
+    const nm=String(o.name||"Đồng nghiệp"), ini=nm.trim().split(/\s+/).pop().charAt(0).toUpperCase();
+    h+=`<li class="person"><span class="av" aria-hidden="true">${esc(ini)}</span><b>${esc(nm)}</b><span class="r num"><b>${money(o.total)}</b></span>
+      <small>${o.items.map(i=>`${i.qty} ${esc(i.name)}`).join(", ")}${o.note?` · 📝 ${esc(o.note)}`:""}</small>
+      ${S.isAdmin?`<span class="act">${chip}<button class="btn ${o.paid?"ghost ":""}small press" data-act="togglePaid" data-uid="${esc(o.uid)}">${o.paid?"Bỏ xác nhận":"Đã nhận tiền"}</button></span>`:`<span class="act">${chip}<span></span></span>`}
     </li>`;
   }
   return h+`</ul>`;
@@ -323,16 +346,16 @@ function openGmail(list){
 function remindPanel(){
   if(!S.isAdmin || !S.menu) return "";
   const all=people(), todo=remindTargets("todo");
-  if(!all.length) return `<section class="remind"><p class="hint" style="margin:0">Chưa có email nào. Mọi người cần đăng nhập vào app ít nhất một lần thì mới gửi nhắc được.</p></section>`;
+  if(!all.length) return `<section class="remind"><span class="ic">✉️</span><div class="body"><p class="hint" style="margin:0">Chưa có email nào. Mọi người cần đăng nhập vào app ít nhất một lần thì mới gửi nhắc được.</p></div></section>`;
   const names=todo.slice(0,6).map(p=>esc(p.name.split(" ").slice(-1)[0])).join(", ")+(todo.length>6?` và ${todo.length-6} người khác`:"");
-  return `<section class="remind">
-    <p class="r-title">${todo.length?`<b>${todo.length}</b> người chưa đặt`:"Mọi người đều đã đặt"}<span> / ${all.length} người đã đăng nhập</span></p>
-    ${todo.length?`<p class="hint">${names}</p>`:""}
+  return `<section class="remind"><span class="ic">${todo.length?"⏰":"🎉"}</span><div class="body">
+    <p class="r-title">${todo.length?`${todo.length} người chưa đặt`:"Mọi người đều đã đặt"}<span> / ${all.length}</span></p>
+    ${todo.length?`<p class="hint">${names}</p>`:`<p class="hint">Không cần nhắc nữa.</p>`}
     <div class="row">
-      ${todo.length?`<button class="btn" data-act="mailRemind" data-who="todo">Gửi email nhắc ${todo.length} người</button>`:""}
-      <button class="btn ghost" data-act="mailRemind" data-who="all">Gửi tất cả</button>
+      ${todo.length?`<button class="btn small press" data-act="mailRemind" data-who="todo">Gửi email nhắc</button>`:""}
+      <button class="btn ghost small press" data-act="mailRemind" data-who="all">Gửi tất cả</button>
       <button class="link" data-act="copyEmails" data-who="${todo.length?"todo":"all"}">Chép email</button>
-    </div>
+    </div></div>
   </section>`;
 }
 function storeMessage(){
@@ -383,29 +406,29 @@ function adminView(){
   const shownImgs=S.imgDraft ?? currentImages() ?? [];
   if(!S.setDirty) S.setDraft={ bankBin:S.settings?.bankBin||"", accountNo:S.settings?.accountNo||"", accountName:S.settings?.accountName||"", deadline:S.settings?.deadline||"10:30" };
   const d=S.draft, st=S.menu?.status||"auto", sd=S.setDraft;
-  let h=`<h2>Menu hôm nay</h2><p class="hint">Dán menu dạng chữ (mỗi món một dòng, có giá) rồi bấm Đọc menu. Có thể đính kèm ảnh menu để mọi người xem.</p>`;
-  h+=`<label class="field" for="menuText">Menu dạng chữ</label><textarea id="menuText" placeholder="Cơm gà xối mỡ 35k&#10;Cơm sườn bì chả 40.000&#10;Bún bò 45k"></textarea>`;
-  h+=`<div class="row" style="margin-top:10px"><button class="btn ghost" data-act="parse">Đọc menu</button></div>`;
-  h+=`<div class="drop"><label class="btn ghost" for="imgIn" style="cursor:pointer">Đính kèm ảnh menu</label><input id="imgIn" type="file" accept="image/*" multiple hidden>
+  let h=`<div class="sec"><h2>Menu hôm nay</h2><span>${esc(dateLabel())}</span></div>`;
+  h+=`<div class="card"><label class="field" for="menuText">Dán menu dạng chữ (mỗi món một dòng, có giá)</label><textarea id="menuText" placeholder="Cơm gà xối mỡ 35k&#10;Cơm sườn bì chả 40.000&#10;Bún bò 45k"></textarea>
+    <div class="row" style="margin-top:10px"><button class="btn ghost small press" data-act="parse">✨ Đọc menu</button></div>
+    <div class="drop"><label class="btn ghost small" for="imgIn" style="cursor:pointer">📷 Đính kèm ảnh menu</label><input id="imgIn" type="file" accept="image/*" multiple hidden>
     <div class="thumbs">${imgsHtml(shownImgs,"Ảnh")}</div>
-    ${shownImgs.length?`<button class="link" data-act="clearImgs">Xoá ảnh</button>`:""}</div>`;
-  h+=`<h2>Danh sách món</h2>`;
+    ${shownImgs.length?`<button class="link" data-act="clearImgs">Xoá ảnh</button>`:""}</div></div>`;
+  h+=`<div class="sec"><h2>Danh sách món</h2><span>${d.items.length} món</span></div><div class="card">`;
   if(!d.items.length) h+=`<p class="hint">Chưa có món nào. Đọc menu ở trên hoặc thêm tay.</p>`;
   d.items.forEach((it,i)=>{ h+=`<div class="edit-row" data-i="${i}"><input type="text" data-f="name" value="${esc(it.name)}" placeholder="Tên món" aria-label="Tên món"><input type="number" data-f="price" value="${esc(it.price)}" min="0" step="1000" placeholder="Giá" aria-label="Giá"><button class="icon-btn" data-act="delRow" aria-label="Xoá món">×</button></div>`; });
   h+=`<button class="link" data-act="addRow">+ Thêm món</button>`;
   h+=`<label class="field" for="menuNote">Lời nhắn kèm menu (không bắt buộc)</label><input type="text" id="menuNote" value="${esc(d.note)}" placeholder="Hôm nay quán có thêm canh chua miễn phí">`;
-  h+=`<div class="row" style="margin-top:16px"><button class="btn" data-act="publishMenu" ${S.busy?"disabled":""}>${S.menu?"Cập nhật menu":"Đăng menu"}</button>${S.menu?`<button class="btn ghost" data-act="copyRemind">Chép tin nhắc</button>`:""}</div>`;
-  if(S.menu) h+=`<h2>Nhận đơn</h2><div class="seg" role="group" aria-label="Trạng thái nhận đơn">
-      <button data-act="status" data-v="auto" aria-pressed="${st==="auto"}">Tự chốt lúc ${esc(S.settings?.deadline||"10:30")}</button>
+  h+=`<div class="row" style="margin-top:16px"><button class="btn press" data-act="publishMenu" ${S.busy?"disabled":""}>🚀 ${S.menu?"Cập nhật menu":"Đăng menu"}</button>${S.menu?`<button class="btn ghost press" data-act="copyRemind">Chép tin nhắc</button>`:""}</div></div>`;
+  if(S.menu) h+=`<div class="sec"><h2>Nhận đơn</h2></div><div class="seg" role="group" aria-label="Trạng thái nhận đơn">
+      <button data-act="status" data-v="auto" aria-pressed="${st==="auto"}">Tự chốt ${esc(S.settings?.deadline||"10:30")}</button>
       <button data-act="status" data-v="open" aria-pressed="${st==="open"}">Mở thêm giờ</button>
       <button data-act="status" data-v="closed" aria-pressed="${st==="closed"}">Chốt ngay</button></div>`;
-  h+=`<h2>Tài khoản nhận tiền</h2><p class="hint">Dùng để tạo mã VietQR có sẵn số tiền cho từng người.</p>
+  h+=`<div class="sec"><h2>Tài khoản nhận tiền</h2></div><div class="card"><p class="hint">Dùng để tạo mã VietQR có sẵn số tiền cho từng người.</p>
     <label class="field" for="bank">Ngân hàng</label>
     <select id="bank" data-s="bankBin"><option value="">Chọn ngân hàng</option>${BANKS.map(b=>`<option value="${b[1]}" ${b[1]===sd.bankBin?"selected":""}>${esc(b[0])}</option>`).join("")}</select>
     <label class="field" for="acc">Số tài khoản</label><input id="acc" type="text" inputmode="numeric" data-s="accountNo" value="${esc(sd.accountNo)}">
     <label class="field" for="accName">Tên chủ tài khoản</label><input id="accName" type="text" data-s="accountName" value="${esc(sd.accountName)}" placeholder="NGUYEN VAN A">
     <label class="field" for="dl">Giờ chốt đơn mỗi ngày</label><input id="dl" type="time" data-s="deadline" value="${esc(sd.deadline)}">
-    <div class="row" style="margin-top:16px"><button class="btn" data-act="saveSettings">Lưu cài đặt</button></div>`;
+    <div class="row" style="margin-top:16px"><button class="btn press" data-act="saveSettings">Lưu cài đặt</button></div></div>`;
   return h;
 }
 
@@ -456,7 +479,7 @@ $("#view").addEventListener("click",async e=>{
     else if(act==="status"){ await setDoc(doc(fs,"menus",dayKey()),{status:b.dataset.v},{merge:true}); toast(b.dataset.v==="closed"?"Đã chốt đơn":b.dataset.v==="open"?"Đã mở thêm giờ đặt món":"Sẽ tự chốt theo giờ"); }
     else if(act==="saveSettings"){ await saveSettings(); }
     else if(act==="enablePush"){ await enablePush(); }
-    else if(act==="hideNotify"){ lsSet("notifyHidden","1"); render(); }
+    else if(act==="hideNotify"){ lsSet("notifyHiddenAt",String(Date.now())); S.forceNotify=false; render(); }
   }catch(err){ handleErr(err); }
 });
 $("#barBtn").addEventListener("click",async()=>{
@@ -470,7 +493,8 @@ $("#barBtn").addEventListener("click",async()=>{
   }catch(err){ handleErr(err); }
   S.busy=false; updateBar();
 });
-$("#signOut").addEventListener("click",()=>signOut(auth));
+$("#signOut").addEventListener("click",()=>{ if(confirm(`Đăng xuất khỏi ${S.authUser?.email||"tài khoản"}?`)) signOut(auth); });
+$("#bell").addEventListener("click",()=>onBell().catch(handleErr));
 // "toggle" không nổi bọt nên bắt ở pha capture
 $("#view").addEventListener("toggle",e=>{
   if(!e.target.matches?.("[data-photos]")) return;
@@ -585,20 +609,32 @@ const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform=
 const isStandalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone===true;
 const pushCapable = () => "Notification" in window && "serviceWorker" in navigator && "PushManager" in window;
 function pushState(){
-  if(!VAPID_KEY) return "off";
   if(isIOS && !isStandalone()) return "ios-install"; // iPhone chỉ nhận thông báo khi đã thêm vào Màn hình chính
   if(!pushCapable()) return "unsupported";
   return Notification.permission; // default | granted | denied
 }
+// "Để sau" chỉ ẩn 3 ngày; bấm chuông thì hiện lại ngay
+const notifyHidden = () => !S.forceNotify && Date.now() - (+lsGet("notifyHiddenAt")||0) < 3*864e5;
 function notifyPanel(){
-  if(lsGet("notifyHidden")==="1") return "";
   const st=pushState();
-  if(st==="ios-install") return `<section class="remind notify"><p class="r-title">Nhận thông báo khi có menu</p>
-    <p class="hint">Trên iPhone: bấm nút <b>Chia sẻ</b> <span aria-hidden="true">⎋</span> ở thanh Safari → <b>Thêm vào Màn hình chính</b>. Mở app từ biểu tượng mới rồi bấm “Bật thông báo”.</p>
-    <div class="row"><button class="link" data-act="hideNotify">Để sau</button></div></section>`;
-  if(st==="default") return `<section class="remind notify"><p class="r-title">Nhận thông báo khi admin đăng menu</p>
-    <div class="row"><button class="btn small" data-act="enablePush">Bật thông báo</button><button class="link" data-act="hideNotify">Để sau</button></div></section>`;
-  return "";
+  if(notifyHidden() || !["ios-install","default"].includes(st)) return "";
+  if(st==="ios-install") return `<section class="remind notify" id="notifyPanel"><span class="ic">🔔</span><div class="body">
+    <p class="r-title">Nhận thông báo khi có menu</p>
+    <p class="hint">iPhone cần cài app trước: bấm nút <b>Chia sẻ</b> <svg class="i" viewBox="0 0 24 24" style="width:16px;height:16px;vertical-align:-3px"><path d="M12 3v13M7 8l5-5 5 5"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg> của Safari → <b>Thêm vào MH chính</b> → mở app từ icon BonBon → bấm <b>Bật thông báo</b>.</p>
+    <div class="row"><button class="link muted" data-act="hideNotify">Để sau</button></div></div></section>`;
+  return `<section class="remind notify" id="notifyPanel"><span class="ic">🔔</span><div class="body">
+    <p class="r-title">Bật thông báo</p>
+    <p class="hint">Báo ngay khi admin đăng menu và nhắc 15 phút trước giờ chốt.</p>
+    <div class="row"><button class="btn small press" data-act="enablePush">Cho phép thông báo</button><button class="link muted" data-act="hideNotify">Để sau</button></div></div></section>`;
+}
+async function onBell(){
+  const st=pushState();
+  if(st==="default"){ await enablePush(); return; }
+  if(st==="granted"){ toast("Thông báo đang bật ✅"); refreshPushToken(); return; }
+  if(st==="denied"){ toast(isIOS?"Đã chặn thông báo. Vào Cài đặt → Thông báo → Cơm trưa để bật lại.":"Đã chặn thông báo. Bấm biểu tượng ổ khoá trên thanh địa chỉ để bật lại."); return; }
+  if(st==="unsupported"){ toast("Trình duyệt này chưa hỗ trợ thông báo (iPhone cần iOS 16.4 trở lên)"); return; }
+  // ios-install: hiện hướng dẫn cài app
+  S.forceNotify=true; S.tab="order"; render(); window.scrollTo({top:0,behavior:"smooth"});
 }
 let messagingP=null;
 async function pushToken(){
@@ -609,7 +645,8 @@ async function pushToken(){
   });
   const m=await messagingP;
   await navigator.serviceWorker.ready;
-  return m.getToken(m.getMessaging(app),{vapidKey:VAPID_KEY,serviceWorkerRegistration:reg});
+  // Không có VAPID_KEY riêng thì Firebase dùng khoá mặc định của project
+  return m.getToken(m.getMessaging(app),VAPID_KEY?{vapidKey:VAPID_KEY,serviceWorkerRegistration:reg}:{serviceWorkerRegistration:reg});
 }
 // Lưu token vào pushTokens/{token}: chỉ n8n (service account) đọc được, không ai khác thấy
 async function saveToken(token){
