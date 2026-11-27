@@ -495,7 +495,7 @@ async function publishMenu(){
   S.busy=true; render();
   try{
     const day=dayKey(), b=writeBatch(fs);
-    const imgs = S.imgDraft ?? currentImages();
+    const imgs = (S.imgDraft ?? currentImages())?.filter(safeImg) ?? null;
     const menu={date:day,items,note:S.draft.note.trim().slice(0,300),status:S.menu?.status||"auto",postedAt:Date.now(),imageCount:imgs?imgs.length:(S.menu?.imageCount||0)};
     b.set(doc(fs,"menus",day),menu);
     // Ghi ảnh khi admin vừa đổi ảnh, hoặc chuyển menu kiểu cũ (ảnh trong doc menu) sang chỗ mới
