@@ -1,7 +1,7 @@
 /* Gửi thông báo đẩy trực tiếp từ Firebase (không cần n8n hay server riêng).
-   - notifyNewMenu: admin đăng menu hôm nay → báo tới mọi điện thoại đã bật thông báo.
+   - notifyNewMenu: admin đăng menu hôm nay, hoặc thêm món mới vào menu → báo tới mọi điện thoại đã bật thông báo.
    - remindBeforeDeadline: 15 phút trước giờ chốt → nhắc những người chưa đặt. */
-const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { setGlobalOptions, logger } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
@@ -51,15 +51,26 @@ async function tokens(exceptUids = new Set()) {
   return snap.docs.filter(d => !exceptUids.has(d.get("uid"))).map(d => d.id);
 }
 
-exports.notifyNewMenu = onDocumentCreated("menus/{day}", async event => {
+exports.notifyNewMenu = onDocumentWritten("menus/{day}", async event => {
   const day = event.params.day;
-  if (day !== vnNow().key) return;            // chỉ báo cho menu của hôm nay
-  if (!(await once(`menu-${day}`))) return;
-  const names = (event.data?.get("items") || []).map(i => i.name).filter(Boolean);
+  const before = event.data?.before?.exists ? event.data.before.data() : null;
+  const after = event.data?.after?.exists ? event.data.after.data() : null;
+  if (!after || day !== vnNow().key) return;          // menu bị xoá / không phải hôm nay
+  const oldIds = new Set((before?.items || []).map(i => i.id));
+  const added = (after.items || []).filter(i => i.name && !oldIds.has(i.id));
+  // Chỉ đổi trạng thái (chốt / mở thêm giờ) hoặc sửa giá → không báo
+  if (!added.length) return;
+  // Mỗi lần đăng (postedAt) chỉ gửi một lần dù trigger chạy lặp
+  if (!(await once(`menu-${day}-${after.postedAt || Date.now()}`))) return;
   const cfg = (await db.doc("config/settings").get()).data() || {};
-  const body = (names.length ? names.slice(0, 4).join(", ") + (names.length > 4 ? "…" : "") + ". " : "")
-    + `Chọn món trước ${cfg.deadline || "10:30"} nhé!`;
-  await sendTo(await tokens(), { title: "Menu cơm trưa hôm nay đã có 🍚", body, tag: `menu-${day}` });
+  const names = added.map(i => i.name);
+  const list = names.slice(0, 4).join(", ") + (names.length > 4 ? "…" : "");
+  const isNew = !before || !(before.items || []).length;
+  await sendTo(await tokens(), {
+    title: isNew ? "Menu cơm trưa hôm nay đã có 🍚" : "Menu vừa có thêm món mới 🍽️",
+    body: `${list}. Chọn món trước ${cfg.deadline || "10:30"} nhé!`,
+    tag: `menu-${day}`
+  });
 });
 
 exports.remindBeforeDeadline = onSchedule({ schedule: "*/5 7-13 * * 1-5", timeZone: TZ }, async () => {

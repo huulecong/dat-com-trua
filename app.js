@@ -131,7 +131,7 @@ function renderHeader(){
   $("#helloSub").textContent = S.authUser ? `${greeting()} 👋` : "BonBon";
   $("#whoName").textContent = S.authUser ? firstName() : "Cơm trưa";
   $("#signOut").textContent = firstName().charAt(0).toUpperCase();
-  $("#bellDot").hidden = !["default","ios-install"].includes(pushState());
+  $("#bellDot").hidden = !(["default","ios-install"].includes(pushState()) || S.pushErr);
   const clock=$("#clock"), txt=$("#clockText"), dl=S.settings?.deadline||"10:30";
   if(!clock || !txt) return;
   const set=(cls,text)=>{ clock.className="status"+(cls?" "+cls:""); txt.textContent=text; };
@@ -479,6 +479,8 @@ $("#view").addEventListener("click",async e=>{
     else if(act==="status"){ await setDoc(doc(fs,"menus",dayKey()),{status:b.dataset.v},{merge:true}); toast(b.dataset.v==="closed"?"Đã chốt đơn":b.dataset.v==="open"?"Đã mở thêm giờ đặt món":"Sẽ tự chốt theo giờ"); }
     else if(act==="saveSettings"){ await saveSettings(); }
     else if(act==="enablePush"){ await enablePush(); }
+    else if(act==="retryPush"){ await checkPush(); }
+    else if(act==="closePushInfo"){ S.pushInfo=false; render(); }
     else if(act==="hideNotify"){ lsSet("notifyHiddenAt",String(Date.now())); S.forceNotify=false; render(); }
   }catch(err){ handleErr(err); }
 });
@@ -617,6 +619,7 @@ function pushState(){
 const notifyHidden = () => !S.forceNotify && Date.now() - (+lsGet("notifyHiddenAt")||0) < 3*864e5;
 function notifyPanel(){
   const st=pushState();
+  if(S.pushInfo && st==="granted") return pushInfoPanel();
   if(notifyHidden() || !["ios-install","default"].includes(st)) return "";
   if(st==="ios-install") return `<section class="remind notify" id="notifyPanel"><span class="ic">🔔</span><div class="body">
     <p class="r-title">Nhận thông báo khi có menu</p>
@@ -630,7 +633,7 @@ function notifyPanel(){
 async function onBell(){
   const st=pushState();
   if(st==="default"){ await enablePush(); return; }
-  if(st==="granted"){ toast("Thông báo đang bật ✅"); refreshPushToken(); return; }
+  if(st==="granted"){ await checkPush(); return; }
   if(st==="denied"){ toast(isIOS?"Đã chặn thông báo. Vào Cài đặt → Thông báo → Cơm trưa để bật lại.":"Đã chặn thông báo. Bấm biểu tượng ổ khoá trên thanh địa chỉ để bật lại."); return; }
   if(st==="unsupported"){ toast("Trình duyệt này chưa hỗ trợ thông báo (iPhone cần iOS 16.4 trở lên)"); return; }
   // ios-install: hiện hướng dẫn cài app
@@ -653,21 +656,54 @@ async function saveToken(token){
   await setDoc(doc(fs,"pushTokens",token),{uid:S.uid,ua:navigator.userAgent.slice(0,200),updatedAt:Date.now()});
   lsSet("push:"+S.uid,S.today.key+"|"+token);
 }
+// Ghi lại kết quả đăng ký để người dùng tự kiểm tra (bấm chuông)
+function pushResult(err){
+  S.pushErr = err ? (err.code || err.message || String(err)) : null;
+  if(!err) S.pushOkAt = Date.now();
+}
+const PUSH_ERR = {
+  "permission-denied":"Firebase từ chối lưu đăng ký. Admin cần deploy firestore.rules mới.",
+  "unsupported":"Trình duyệt này không hỗ trợ nhận thông báo đẩy.",
+  "no-sw":"Không khởi động được service worker. Hãy tải lại app.",
+  "messaging/permission-blocked":"Thông báo đang bị chặn trong cài đặt điện thoại.",
+  "messaging/token-subscribe-failed":"Không đăng ký được với Firebase Cloud Messaging. Kiểm tra mạng rồi thử lại."
+};
+async function registerPush(){
+  try{ await saveToken(await pushToken()); pushResult(null); return true; }
+  catch(e){ console.warn("push:",e); pushResult(e); return false; }
+}
 async function enablePush(){
   if(!pushCapable()){ toast("Trình duyệt này chưa hỗ trợ thông báo"); return; }
   const p=await Notification.requestPermission(); // phải gọi trực tiếp từ cú bấm (yêu cầu của iOS)
   if(p!=="granted"){ toast("Bạn chưa cho phép thông báo. Có thể bật lại trong Cài đặt."); render(); return; }
-  try{ await saveToken(await pushToken()); toast("Đã bật thông báo"); }
-  catch(e){ console.warn("push:",e); toast("Chưa bật được thông báo, thử lại sau"); }
+  const ok=await registerPush();
+  if(!ok) S.pushInfo=true;
+  toast(ok?"Đã bật thông báo 🔔":"Chưa đăng ký được thông báo, xem chi tiết bên dưới");
   render();
 }
 // Token có thể đổi: mỗi ngày kiểm tra lại một lần
-async function refreshPushToken(){
+async function refreshPushToken(force){
   if(pushState()!=="granted" || !S.uid) return;
   try{
     const t=await pushToken(), saved=lsGet("push:"+S.uid)||"";
-    if(saved!==S.today.key+"|"+t) await saveToken(t);
-  }catch(e){ console.warn("push:",e); }
+    if(force || saved!==S.today.key+"|"+t) await saveToken(t);
+    pushResult(null);
+  }catch(e){ console.warn("push:",e); pushResult(e); }
+  renderHeader();
+}
+function pushInfoPanel(){
+  const err=S.pushErr, t=S.pushOkAt?new Date(S.pushOkAt).toLocaleTimeString("vi-VN",{hour:"2-digit",minute:"2-digit"}):"";
+  const head = S.pushChecking ? ["⏳","Đang kiểm tra…",""]
+    : err ? ["⚠️","Chưa đăng ký được thông báo", esc(PUSH_ERR[err]||`Lỗi: ${err}`)]
+    : ["✅","Điện thoại đã đăng ký nhận thông báo", `Kiểm tra lúc ${t}. Bạn sẽ nhận tin khi admin đăng menu hoặc thêm món, và 15 phút trước giờ chốt.`];
+  return `<section class="remind notify" id="notifyPanel"><span class="ic">${head[0]}</span><div class="body">
+    <p class="r-title">${head[1]}</p>${head[2]?`<p class="hint">${head[2]}</p>`:""}
+    <div class="row"><button class="btn small ghost press" data-act="retryPush" ${S.pushChecking?"disabled":""}>Kiểm tra lại</button><button class="link muted" data-act="closePushInfo">Đóng</button></div></div></section>`;
+}
+async function checkPush(){
+  S.pushInfo=true; S.pushChecking=true; S.tab="order"; render(); window.scrollTo({top:0,behavior:"smooth"});
+  await refreshPushToken(true);
+  S.pushChecking=false; render();
 }
 async function announceMenu(menu){
   const body=(menu.items||[]).slice(0,4).map(i=>i.name).join(", ")+((menu.items||[]).length>4?"…":"");

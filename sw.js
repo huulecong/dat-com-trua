@@ -1,7 +1,7 @@
 /* Service worker: nhận thông báo đẩy (FCM) khi app đóng + cache để mở app nhanh, dùng được khi mạng yếu.
    Đổi VERSION mỗi lần sửa app.js / index.html để máy người dùng lấy bản mới. */
-const VERSION = "v8";
-const SHELL = ["./", "./index.html", "./app.js?v=8", "./config.js?v=6", "./manifest.webmanifest", "./icons/icon-192.png", "./icons/favicon-32.png"];
+const VERSION = "v9";
+const SHELL = ["./", "./index.html", "./app.js?v=9", "./config.js?v=6", "./manifest.webmanifest", "./icons/icon-192.png", "./icons/favicon-32.png"];
 
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
