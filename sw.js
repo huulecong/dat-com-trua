@@ -1,7 +1,7 @@
 /* Service worker: nhận thông báo đẩy (FCM) khi app đóng + cache để mở app nhanh, dùng được khi mạng yếu.
    Đổi VERSION mỗi lần sửa app.js / index.html để máy người dùng lấy bản mới. */
-const VERSION = "v14";
-const SHELL = ["./", "./index.html", "./boot.js?v=10", "./app.js?v=14", "./config.js?v=8", "./manifest.webmanifest", "./icons/icon-192.png", "./icons/favicon-32.png"];
+const VERSION = "v15";
+const SHELL = ["./", "./index.html", "./boot.js?v=10", "./app.js?v=15", "./config.js?v=9", "./manifest.webmanifest", "./icons/icon-192.png", "./icons/favicon-32.png"];
 
 self.addEventListener("install", e => {
   // Cài lỗi một file cũng không sao: app vẫn chạy bằng mạng

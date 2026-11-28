@@ -29,4 +29,4 @@ export const VAPID_KEY = "";
 
 // 6) Địa chỉ Cloudflare Worker gửi thông báo đẩy (xem README mục "Thông báo đẩy").
 //    Ví dụ "https://bonbon-push.ten-ban.workers.dev". Để "" thì app vẫn chạy, chỉ không gửi được thông báo khi app đóng.
-export const PUSH_WORKER_URL = "";
+export const PUSH_WORKER_URL = "https://bonbon-push.bonbon-comtrua.workers.dev";

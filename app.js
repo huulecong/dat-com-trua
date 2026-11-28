@@ -1,7 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, initializeFirestore, memoryLocalCache, doc, collection, onSnapshot, setDoc, updateDoc, deleteDoc, getDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig, ALLOWED_DOMAIN, APP_CHECK_SITE_KEY, VAPID_KEY, PUSH_WORKER_URL } from "./config.js?v=8";
+import { firebaseConfig, ALLOWED_DOMAIN, APP_CHECK_SITE_KEY, VAPID_KEY, PUSH_WORKER_URL } from "./config.js?v=9";
 
 performance.mark?.("app:start"); // đo tốc độ mở app (DevTools → Performance)
 const TZ = "Asia/Ho_Chi_Minh";
