@@ -58,7 +58,11 @@
 
 /* ===== Base ===== */
 *,*::before,*::after{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%}
+html{-webkit-text-size-adjust:100%;scroll-padding-top:calc(76px + env(safe-area-inset-top,0px));scroll-padding-bottom:170px}
+/* Bàn phím đang mở: ẩn thanh dưới, chừa ít chỗ hơn */
+body.typing .tabbar,body.typing .bar{display:none}
+body.typing main.wrap{padding-bottom:40px}
+body.typing{scroll-padding-bottom:24px}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 "Be Vietnam Pro",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent;min-height:100dvh}
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer}
@@ -82,7 +86,8 @@ svg.i{width:22px;height:22px;flex:none;stroke:currentColor;fill:none;stroke-widt
 .avatar{font-weight:700;font-size:14px;background:var(--yellow);color:var(--yellow-ink)}
 
 /* ===== Layout ===== */
-main{padding:4px 0 calc(170px + env(safe-area-inset-bottom,0px))}
+/* main cũng có class .wrap → phải ghi rõ để .wrap không xoá khoảng trống dưới đáy (chừa chỗ cho giỏ hàng + tab bar) */
+main.wrap{padding-top:4px;padding-bottom:calc(170px + env(safe-area-inset-bottom,0px))}
 .sec{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:26px 2px 12px}
 .sec h2{font-size:18px;font-weight:800;margin:0;letter-spacing:-.01em}
 .sec span{color:var(--muted);font-size:13px}
@@ -267,7 +272,8 @@ textarea{resize:vertical;min-height:70px}
 .toast.show{opacity:1;transform:translate(-50%,0)}
 </style>
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js" integrity="sha384-mZT2gIty7ZDdOGkxfP6joZcYdMW1Jvj9dRlfpTmaJAKKXTqzygtB22k7FLe+KZC1" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script type="module" src="app.js?v=9"></script>
+<script src="boot.js?v=10"></script>
+<script type="module" src="app.js?v=11"></script>
 </head>
 <body>
 <header class="appbar">

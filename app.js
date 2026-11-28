@@ -1,7 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, collection, onSnapshot, setDoc, updateDoc, deleteDoc, getDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig, ALLOWED_DOMAIN, APP_CHECK_SITE_KEY, VAPID_KEY } from "./config.js?v=6";
+import { getFirestore, initializeFirestore, memoryLocalCache, doc, collection, onSnapshot, setDoc, updateDoc, deleteDoc, getDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { firebaseConfig, ALLOWED_DOMAIN, APP_CHECK_SITE_KEY, VAPID_KEY } from "./config.js?v=7";
 
 const TZ = "Asia/Ho_Chi_Minh";
 const BANKS = [
@@ -79,17 +79,18 @@ let app, auth, fs;
 if(configured){
   app=initializeApp(firebaseConfig);
   if(APP_CHECK_SITE_KEY){
-    try{
-      const ac=await import("https://www.gstatic.com/firebasejs/10.12.2/firebase-app-check.js");
-      ac.initializeAppCheck(app,{provider:new ac.ReCaptchaV3Provider(APP_CHECK_SITE_KEY),isTokenAutoRefreshEnabled:true});
-    }catch(e){ console.warn("App Check:",e); }
+    import("https://www.gstatic.com/firebasejs/10.12.2/firebase-app-check.js")
+      .then(ac=>ac.initializeAppCheck(app,{provider:new ac.ReCaptchaV3Provider(APP_CHECK_SITE_KEY),isTokenAutoRefreshEnabled:true}))
+      .catch(e=>console.warn("App Check:",e));
   }
   auth=getAuth(app);
   // Lưu dữ liệu vào máy: lần mở sau hiện menu ngay, không chờ mạng
-  try{ fs=initializeFirestore(app,{localCache:persistentLocalCache({tabManager:persistentMultipleTabManager()})}); }
+  // Không dùng bộ nhớ đệm IndexedDB: trên Safari/iPhone nó hay làm Firestore treo hẳn sau một lần ghi
+  // ("INTERNAL ASSERTION FAILED"), khiến app không tải được dữ liệu. Dữ liệu mỗi ngày rất nhỏ nên tải thẳng vẫn nhanh.
+  try{ fs=initializeFirestore(app,{localCache:memoryLocalCache()}); }
   catch(e){ fs=getFirestore(app); }
 }
-const skeleton = () => `<div class="sk" aria-hidden="true"><i></i><i></i><i></i><i></i></div><span class="sr">Đang tải</span>`;
+const skeleton = () => `${S.slow?`<p class="note lock"><span aria-hidden="true">📶</span><span>Mạng chậm, đang thử kết nối lại… <button class="link" data-act="reload" style="padding:0">Tải lại</button></span></p>`:""}<div class="sk" aria-hidden="true"><i></i><i></i><i></i><i></i></div><span class="sr">Đang tải</span>`;
 
 /* ---------- state ---------- */
 const S = {
@@ -153,20 +154,24 @@ setInterval(()=>{
 let pending=false;
 const editing = () => { const a=document.activeElement; return a && $("#view").contains(a) && /INPUT|TEXTAREA|SELECT/.test(a.tagName); };
 function safeRender(){ if(editing()){ pending=true; return; } render(); }
+// Đang gõ (bàn phím mở): ẩn tab bar + giỏ hàng để không che ô nhập và nút bấm
+const typingEl = el => el && /INPUT|TEXTAREA|SELECT/.test(el.tagName) && !["checkbox","radio","file","button"].includes(el.type);
+document.addEventListener("focusin",e=>{ if(typingEl(e.target)) document.body.classList.add("typing"); });
+document.addEventListener("focusout",()=>setTimeout(()=>{ if(!typingEl(document.activeElement)) document.body.classList.remove("typing"); },50));
 $("#view").addEventListener("focusout",()=>{ if(pending) setTimeout(()=>{ if(!editing()){ pending=false; render(); } },0); });
 
 function render(){
   renderHeader();
   const v=$("#view");
   $("#who").hidden=!S.authUser; $("#tabs").hidden=!S.authUser;
-  if(!configured){ v.innerHTML=`<div class="empty"><h3>Chưa cấu hình Firebase</h3><p>Mở file config.js, dán cấu hình Firebase và email admin rồi tải lại trang. Hướng dẫn nằm trong README.md.</p></div>`; $("#bar").hidden=true; return; }
+  if(!configured){ window.__appStarted=true; v.innerHTML=`<div class="empty"><h3>Chưa cấu hình Firebase</h3><p>Mở file config.js, dán cấu hình Firebase và email admin rồi tải lại trang. Hướng dẫn nằm trong README.md.</p></div>`; $("#bar").hidden=true; return; }
   if(!S.authReady){ v.innerHTML=skeleton(); return; }
+  window.__appStarted=true;
   if(!S.authUser){ v.innerHTML=signInView(); $("#bar").hidden=true; return; }
   document.querySelectorAll(".tab").forEach(b=>b.setAttribute("aria-selected", String(b.dataset.tab===S.tab)));
   $("#adminTab").hidden=!S.isAdmin;
-  if(S.tab==="order") v.innerHTML=orderView();
-  else if(S.tab==="summary") v.innerHTML=summaryView();
-  else v.innerHTML=adminView();
+  const body = S.tab==="order" ? orderView() : S.tab==="summary" ? summaryView() : adminView();
+  v.innerHTML = loadErrBanner() + body;
   updateBar(); renderHeader();
 }
 $("#tabs").addEventListener("click",e=>{
@@ -481,6 +486,8 @@ $("#view").addEventListener("click",async e=>{
     else if(act==="enablePush"){ await enablePush(); }
     else if(act==="retryPush"){ await checkPush(); }
     else if(act==="closePushInfo"){ S.pushInfo=false; render(); }
+    else if(act==="reload"){ location.reload(); }
+    else if(act==="retryLoad"){ subscribeDay(); render(); }
     else if(act==="hideNotify"){ lsSet("notifyHiddenAt",String(Date.now())); S.forceNotify=false; render(); }
   }catch(err){ handleErr(err); }
 });
@@ -554,6 +561,8 @@ function subscribeDay(){
   dayUnsubs.forEach(u=>u()); dayUnsubs=[];
   const day=dayKey();
   S.menu=null; S.orders={}; S.images=null; S.imagesDay=null; S.photosOpen=false; S.loaded={menu:false,orders:false};
+  S.slow=false; S.loadErr=null; clearTimeout(subscribeDay._t);
+  subscribeDay._t=setTimeout(()=>{ if(!S.loaded.menu||!S.loaded.orders){ S.slow=true; safeRender(); } },8000);
   dayUnsubs.push(onSnapshot(doc(fs,"menus",day),s=>{
     if(s.metadata.fromCache && !s.exists()) return;
     const prev=S.menu, wasLoaded=S.loaded.menu; S.menu=s.exists()?s.data():null; S.loaded.menu=true; S._locked=isLocked();
@@ -561,12 +570,35 @@ function subscribeDay(){
     if(wasLoaded && !prev && S.menu && !s.metadata.hasPendingWrites && !S.isAdmin) announceMenu(S.menu);
     if(prev && prev.postedAt!==S.menu?.postedAt && S.imagesDay===day && !s.metadata.hasPendingWrites){ S.images=null; S.imagesDay=null; if(S.photosOpen) loadImages(); }
     safeRender();
-  },err=>{ console.warn(err); S.loaded.menu=true; safeRender(); }));
+  },err=>dataError(err,"menu")));
   dayUnsubs.push(onSnapshot(collection(fs,"days",day,"orders"),s=>{
     if(s.metadata.fromCache && s.empty) return;
-    const o={}; s.forEach(d=>o[d.id]=d.data()); S.orders=o; S.loaded.orders=true; safeRender();
-  },err=>{ console.warn(err); S.loaded.orders=true; safeRender(); }));
+    const o={}; s.forEach(d=>o[d.id]=d.data()); S.orders=o; S.loaded.orders=true; S.loadErr=null;
+    try{ sessionStorage.removeItem("fsRecover"); }catch(e){}
+    safeRender();
+  },err=>dataError(err,"orders")));
 }
+function dataError(err,what){
+  console.warn(what+":",err);
+  S.loaded[what]=true; S.loadErr=err?.code||err?.message||"unknown";
+  if(/INTERNAL ASSERTION/i.test(err?.message||"")) return recoverFirestore();
+  safeRender();
+}
+// Firestore bị treo (lỗi nội bộ SDK): tải lại trang một lần để khởi động lại kết nối
+function recoverFirestore(){
+  let n=0; try{ n=+sessionStorage.getItem("fsRecover")||0; }catch(e){}
+  if(n>=2){ S.loadErr="internal"; safeRender(); return; }
+  try{ sessionStorage.setItem("fsRecover",String(n+1)); }catch(e){}
+  toast("Đang kết nối lại…"); setTimeout(()=>location.reload(),800);
+}
+window.addEventListener("unhandledrejection",e=>{ if(/INTERNAL ASSERTION/i.test(e.reason?.message||"")) recoverFirestore(); });
+window.addEventListener("error",e=>{ if(/INTERNAL ASSERTION/i.test(e.message||"")) recoverFirestore(); });
+const LOAD_ERR = {
+  "permission-denied":"Không có quyền đọc dữ liệu. Admin cần deploy firestore.rules mới (và tạo tài liệu admins).",
+  "unavailable":"Không kết nối được máy chủ. Kiểm tra mạng rồi thử lại.",
+  "internal":"Kết nối Firestore bị lỗi nhiều lần. Bấm Thử lại hoặc mở lại app."
+};
+const loadErrBanner = () => S.loadErr ? `<p class="note lock"><span aria-hidden="true">⚠️</span><span>${esc(LOAD_ERR[S.loadErr]||`Lỗi tải dữ liệu: ${S.loadErr}`)} <button class="link" data-act="retryLoad" style="padding:0">Thử lại</button></span></p>` : "";
 function subscribeUsers(){
   unsubUsers?.();
   unsubUsers=onSnapshot(collection(fs,"users"),s=>{ const o={}; s.forEach(d=>o[d.id]=d.data()); S.users=o; safeRender(); },e=>console.warn("users:",e.code));
