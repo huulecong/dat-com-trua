@@ -9,3 +9,6 @@ service-account*.json
 *-service-account*.json
 .wrangler/
 .dev.vars
+
+# Hướng dẫn cài đặt / deploy — chỉ giữ trên máy
+DEPLOY.md
