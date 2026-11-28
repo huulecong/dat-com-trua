@@ -414,7 +414,7 @@ function adminView(){
   let h=`<div class="sec"><h2>Menu hôm nay</h2><span>${esc(dateLabel())}</span></div>`;
   h+=`<div class="card"><label class="field" for="menuText">Dán menu dạng chữ (mỗi món một dòng, có giá)</label><textarea id="menuText" placeholder="Cơm gà xối mỡ 35k&#10;Cơm sườn bì chả 40.000&#10;Bún bò 45k"></textarea>
     <div class="row" style="margin-top:10px"><button class="btn ghost small press" data-act="parse">✨ Đọc menu</button></div>
-    <div class="drop"><label class="btn ghost small" for="imgIn" style="cursor:pointer">📷 Đính kèm ảnh menu</label><input id="imgIn" type="file" accept="image/*" multiple hidden>
+    <div class="drop"><label class="btn ghost small" for="imgIn" style="cursor:pointer">📷 Đính kèm ảnh menu</label><input id="imgIn" class="sr" type="file" accept="image/*" multiple>
     <div class="thumbs">${imgsHtml(shownImgs,"Ảnh")}</div>
     ${shownImgs.length?`<button class="link" data-act="clearImgs">Xoá ảnh</button>`:""}</div></div>`;
   h+=`<div class="sec"><h2>Danh sách món</h2><span>${d.items.length} món</span></div><div class="card">`;

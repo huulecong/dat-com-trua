@@ -1,0 +1,20 @@
+# Cloudflare Worker gửi thông báo đẩy cho app Cơm trưa BonBon (gói Free là đủ)
+name = "bonbon-push"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+
+# Gọi lại chính mình để chia nhỏ đợt gửi khi có nhiều máy (gói Free giới hạn 50 lệnh gọi ra ngoài mỗi lần chạy)
+services = [{ binding = "SELF", service = "bonbon-push" }]
+
+[vars]
+PROJECT_ID = "datcomtrua-14f62"
+# Trang web được phép gọi Worker (cách nhau bởi dấu phẩy)
+ALLOWED_ORIGINS = "https://huulecong.github.io,http://localhost:8765"
+# Chỉ cho email thuộc tên miền này (để trống nếu mọi tài khoản Google đều dùng được). Trùng ALLOWED_DOMAIN trong config.js
+ALLOWED_DOMAIN = ""
+
+# 15 phút trước giờ chốt nhắc người chưa đặt: chạy mỗi 5 phút, 7h–13h giờ VN (= 0h–6h UTC), T2–T6
+[triggers]
+crons = ["*/5 0-6 * * 1-5"]
+
+# Khoá bí mật (KHÔNG ghi vào file này):  npx wrangler secret put FIREBASE_SA  < file-service-account.json
