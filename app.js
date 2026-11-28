@@ -1,8 +1,9 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, initializeFirestore, memoryLocalCache, doc, collection, onSnapshot, setDoc, updateDoc, deleteDoc, getDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig, ALLOWED_DOMAIN, APP_CHECK_SITE_KEY, VAPID_KEY } from "./config.js?v=7";
+import { firebaseConfig, ALLOWED_DOMAIN, APP_CHECK_SITE_KEY, VAPID_KEY, PUSH_WORKER_URL } from "./config.js?v=8";
 
+performance.mark?.("app:start"); // đo tốc độ mở app (DevTools → Performance)
 const TZ = "Asia/Ho_Chi_Minh";
 const BANKS = [
   ["Vietcombank","970436"],["VietinBank","970415"],["BIDV","970418"],["Agribank","970405"],
@@ -14,6 +15,9 @@ const BANKS = [
 const WEEKDAYS = ["Chủ nhật","Thứ hai","Thứ ba","Thứ tư","Thứ năm","Thứ sáu","Thứ bảy"];
 
 /* ---------- helpers ---------- */
+const lsGet = k => { try{ return localStorage.getItem(k); }catch(e){ return null; } };
+const lsSet = (k,v) => { try{ v==null?localStorage.removeItem(k):localStorage.setItem(k,v); }catch(e){} };
+
 const $ = (s, r=document) => r.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const money = n => (Math.round(n)||0).toLocaleString("vi-VN") + "đ";
@@ -357,7 +361,8 @@ function remindPanel(){
     <p class="r-title">${todo.length?`${todo.length} người chưa đặt`:"Mọi người đều đã đặt"}<span> / ${all.length}</span></p>
     ${todo.length?`<p class="hint">${names}</p>`:`<p class="hint">Không cần nhắc nữa.</p>`}
     <div class="row">
-      ${todo.length?`<button class="btn small press" data-act="mailRemind" data-who="todo">Gửi email nhắc</button>`:""}
+      ${todo.length&&PUSH_WORKER_URL?`<button class="btn small press" data-act="pushRemind">🔔 Nhắc bằng thông báo</button>`:""}
+      ${todo.length?`<button class="btn small ${PUSH_WORKER_URL?"ghost ":""}press" data-act="mailRemind" data-who="todo">Gửi email nhắc</button>`:""}
       <button class="btn ghost small press" data-act="mailRemind" data-who="all">Gửi tất cả</button>
       <button class="link" data-act="copyEmails" data-who="${todo.length?"todo":"all"}">Chép email</button>
     </div></div>
@@ -485,6 +490,8 @@ $("#view").addEventListener("click",async e=>{
     else if(act==="saveSettings"){ await saveSettings(); }
     else if(act==="enablePush"){ await enablePush(); }
     else if(act==="retryPush"){ await checkPush(); }
+    else if(act==="testPush"){ b.disabled=true; const j=await pushApi("/test"); toast(`Sẽ gửi sau 5 giây tới ${j.queued} máy. Khoá màn hình ngay để thử!`); }
+    else if(act==="pushRemind"){ b.disabled=true; try{ toast(sentMsg(await pushApi("/remind"))); } finally{ b.disabled=false; } }
     else if(act==="closePushInfo"){ S.pushInfo=false; render(); }
     else if(act==="reload"){ location.reload(); }
     else if(act==="retryLoad"){ subscribeDay(); render(); }
@@ -513,6 +520,7 @@ function handleErr(err){
   console.error(err);
   if(err?.code==="permission-denied") toast("Bạn không có quyền thao tác này.");
   else if(err?.code==="auth/popup-closed-by-user") {}
+  else if(err?.message && !err.code) toast(err.message);
   else toast("Chưa lưu được, kiểm tra mạng rồi thử lại.");
 }
 
@@ -536,6 +544,7 @@ async function publishMenu(){
     await b.commit();
     if(imgs){ S.images=imgs; S.imagesDay=day; }
     S.draftDirty=false; S.imgDraft=null; toast(S.menu?"Đã cập nhật menu":"Đã đăng menu");
+    if(PUSH_WORKER_URL) pushApi("/notify").then(j=>toast(sentMsg(j))).catch(e=>{ console.warn("notify:",e); toast("Đã đăng menu, nhưng chưa gửi được thông báo: "+e.message); });
   }catch(err){ handleErr(err); }
   S.busy=false; render();
 }
@@ -561,19 +570,21 @@ function subscribeDay(){
   dayUnsubs.forEach(u=>u()); dayUnsubs=[];
   const day=dayKey();
   S.menu=null; S.orders={}; S.images=null; S.imagesDay=null; S.photosOpen=false; S.loaded={menu:false,orders:false};
+  loadCache(S.uid);
   S.slow=false; S.loadErr=null; clearTimeout(subscribeDay._t);
   subscribeDay._t=setTimeout(()=>{ if(!S.loaded.menu||!S.loaded.orders){ S.slow=true; safeRender(); } },8000);
   dayUnsubs.push(onSnapshot(doc(fs,"menus",day),s=>{
     if(s.metadata.fromCache && !s.exists()) return;
-    const prev=S.menu, wasLoaded=S.loaded.menu; S.menu=s.exists()?s.data():null; S.loaded.menu=true; S._locked=isLocked();
+    const prev=S.menu, wasLive=S.menuLive; S.menu=s.exists()?s.data():null; S.loaded.menu=true; S.menuLive=true; S._locked=isLocked();
     // Đang mở app thì báo ngay khi admin vừa đăng menu (không báo lại cho chính admin)
-    if(wasLoaded && !prev && S.menu && !s.metadata.hasPendingWrites && !S.isAdmin) announceMenu(S.menu);
+    if(wasLive && !prev && S.menu && !s.metadata.hasPendingWrites && !S.isAdmin) announceMenu(S.menu);
+    saveCache();
     if(prev && prev.postedAt!==S.menu?.postedAt && S.imagesDay===day && !s.metadata.hasPendingWrites){ S.images=null; S.imagesDay=null; if(S.photosOpen) loadImages(); }
     safeRender();
   },err=>dataError(err,"menu")));
   dayUnsubs.push(onSnapshot(collection(fs,"days",day,"orders"),s=>{
     if(s.metadata.fromCache && s.empty) return;
-    const o={}; s.forEach(d=>o[d.id]=d.data()); S.orders=o; S.loaded.orders=true; S.loadErr=null;
+    const o={}; s.forEach(d=>o[d.id]=d.data()); S.orders=o; S.loaded.orders=true; S.loadErr=null; saveCache();
     try{ sessionStorage.removeItem("fsRecover"); }catch(e){}
     safeRender();
   },err=>dataError(err,"orders")));
@@ -605,7 +616,7 @@ function subscribeUsers(){
 }
 function startData(){
   unsubs.push(onSnapshot(doc(fs,"config","settings"),s=>{
-    S.settings=s.exists()?s.data():null;
+    S.settings=s.exists()?s.data():null; saveCache();
     // Cài đặt cũ chưa có deadlineMin (rules cần): admin tự bổ sung
     if(S.isAdmin && S.settings?.deadline && S.settings.deadlineMin==null) setDoc(doc(fs,"config","settings"),{deadlineMin:parseHM(S.settings.deadline)},{merge:true}).catch(e=>console.warn(e));
     safeRender();
@@ -616,8 +627,25 @@ function stopData(){
   unsubs.forEach(u=>u()); unsubs=[]; dayUnsubs.forEach(u=>u()); dayUnsubs=[]; unsubUsers?.(); unsubUsers=null;
   S.orders={}; S.users={}; S.menu=null; S.settings=null; S.images=null; S.imagesDay=null; S.loaded={menu:false,orders:false};
 }
-const lsGet = k => { try{ return localStorage.getItem(k); }catch(e){ return null; } };
-const lsSet = (k,v) => { try{ v==null?localStorage.removeItem(k):localStorage.setItem(k,v); }catch(e){} };
+/* ---------- bộ nhớ đệm cục bộ: mở app hiện dữ liệu ngay (vài ms), server trả về thì cập nhật ---------- */
+const CACHE_V=1;
+function saveCache(){
+  if(!S.uid) return;
+  clearTimeout(saveCache._t);
+  saveCache._t=setTimeout(()=>{
+    const menu = S.menu ? { ...S.menu, images: undefined } : null; // không lưu ảnh (nặng)
+    lsSet("cache:"+S.uid, JSON.stringify({ v:CACHE_V, day:dayKey(), menu, orders:S.orders, settings:S.settings, mL:S.loaded.menu, oL:S.loaded.orders }));
+  },250);
+}
+function loadCache(uid){
+  let c=null; try{ c=JSON.parse(lsGet("cache:"+uid)||"null"); }catch(e){}
+  if(!c || c.v!==CACHE_V) return false;
+  if(c.settings && !S.settings) S.settings=c.settings;
+  if(c.day!==dayKey()) return false; // dữ liệu hôm qua: không dùng
+  S.menu=c.menu||null; S.orders=c.orders||{};
+  S.loaded={menu:!!c.mL, orders:!!c.oL}; S.menuLive=false;
+  return true;
+}
 // Quyền admin do firestore.rules quyết định (collection admins). Ở đây chỉ để hiện/ẩn giao diện.
 async function checkAdmin(u){
   const email=(u.email||"").toLowerCase(), key="adm:"+u.uid;
@@ -684,6 +712,17 @@ async function pushToken(){
   return m.getToken(m.getMessaging(app),VAPID_KEY?{vapidKey:VAPID_KEY,serviceWorkerRegistration:reg}:{serviceWorkerRegistration:reg});
 }
 // Lưu token vào pushTokens/{token}: chỉ n8n (service account) đọc được, không ai khác thấy
+/* Gọi Cloudflare Worker gửi thông báo (kèm ID token để Worker biết ai gọi) */
+async function pushApi(path){
+  if(!PUSH_WORKER_URL) throw new Error("chưa cấu hình PUSH_WORKER_URL trong config.js");
+  if(!auth.currentUser) throw new Error("đang đăng nhập, thử lại sau giây lát");
+  const t=await auth.currentUser.getIdToken();
+  const r=await fetch(PUSH_WORKER_URL.replace(/\/+$/,"")+path,{method:"POST",headers:{authorization:"Bearer "+t}});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(j.error||("lỗi "+r.status));
+  return j;
+}
+const sentMsg = j => j.skipped ? j.skipped : `🔔 Đã gửi thông báo tới ${j.ok}/${j.total} máy`;
 async function saveToken(token){
   await setDoc(doc(fs,"pushTokens",token),{uid:S.uid,ua:navigator.userAgent.slice(0,200),updatedAt:Date.now()});
   lsSet("push:"+S.uid,S.today.key+"|"+token);
@@ -730,7 +769,7 @@ function pushInfoPanel(){
     : ["✅","Điện thoại đã đăng ký nhận thông báo", `Kiểm tra lúc ${t}. Bạn sẽ nhận tin khi admin đăng menu hoặc thêm món, và 15 phút trước giờ chốt.`];
   return `<section class="remind notify" id="notifyPanel"><span class="ic">${head[0]}</span><div class="body">
     <p class="r-title">${head[1]}</p>${head[2]?`<p class="hint">${head[2]}</p>`:""}
-    <div class="row"><button class="btn small ghost press" data-act="retryPush" ${S.pushChecking?"disabled":""}>Kiểm tra lại</button><button class="link muted" data-act="closePushInfo">Đóng</button></div></div></section>`;
+    <div class="row">${!err&&!S.pushChecking&&PUSH_WORKER_URL?`<button class="btn small press" data-act="testPush">Gửi thử cho máy này</button>`:""}<button class="btn small ghost press" data-act="retryPush" ${S.pushChecking?"disabled":""}>Kiểm tra lại</button><button class="link muted" data-act="closePushInfo">Đóng</button></div></div></section>`;
 }
 async function checkPush(){
   S.pushInfo=true; S.pushChecking=true; S.tab="order"; render(); window.scrollTo({top:0,behavior:"smooth"});
@@ -746,7 +785,16 @@ async function announceMenu(menu){
   }
 }
 
+// Người dùng lần trước (chỉ để hiện giao diện ngay; quyền thật vẫn do Firebase Auth + rules quyết định)
+function bootFromCache(){
+  let last=null; try{ last=JSON.parse(lsGet("lastUser")||"null"); }catch(e){}
+  if(!last?.uid) return;
+  S.authReady=true; S.authUser={ uid:last.uid, email:last.email, displayName:last.name, cached:true };
+  S.uid=last.uid; S.myName=last.name||"Bạn"; S.isAdmin=lsGet("adm:"+last.uid)==="1";
+  loadCache(last.uid);
+}
 if(configured){
+  bootFromCache();
   getRedirectResult(auth).catch(err=>console.warn(err));
   onAuthStateChanged(auth,async u=>{
     if(u && ALLOWED_DOMAIN && !(u.email||"").toLowerCase().endsWith("@"+ALLOWED_DOMAIN.toLowerCase())){
@@ -754,6 +802,8 @@ if(configured){
     }
     S.authReady=true; S.authUser=u||null;
     stopData();
+    if(u) lsSet("lastUser",JSON.stringify({uid:u.uid,email:u.email||"",name:(u.displayName||u.email||"Bạn").slice(0,100)}));
+    else lsSet("lastUser",null);
     if(u){
       S.uid=u.uid; S.myName=(u.displayName||u.email||"Bạn").slice(0,100); S.isAdmin=false;
       startData();

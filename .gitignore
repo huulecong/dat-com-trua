@@ -4,3 +4,8 @@ node_modules/
 *-debug.log
 service-account*.json
 .env*
+# Khoá service account Firebase (tải từ Console) — tuyệt đối không commit
+*firebase-adminsdk*.json
+*-service-account*.json
+.wrangler/
+.dev.vars

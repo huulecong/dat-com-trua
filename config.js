@@ -26,3 +26,7 @@ export const APP_CHECK_SITE_KEY = "";
 //    Để "" thì Firebase dùng khoá mặc định, thông báo vẫn chạy bình thường.
 //    Muốn dùng khoá riêng: Firebase Console → Project settings → Cloud Messaging → Web Push certificates → Generate key pair.
 export const VAPID_KEY = "";
+
+// 6) Địa chỉ Cloudflare Worker gửi thông báo đẩy (xem README mục "Thông báo đẩy").
+//    Ví dụ "https://bonbon-push.ten-ban.workers.dev". Để "" thì app vẫn chạy, chỉ không gửi được thông báo khi app đóng.
+export const PUSH_WORKER_URL = "";

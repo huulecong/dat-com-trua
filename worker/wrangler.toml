@@ -3,8 +3,9 @@ name = "bonbon-push"
 main = "src/index.js"
 compatibility_date = "2026-11-01"
 
-# Gọi lại chính mình để chia nhỏ đợt gửi khi có nhiều máy (gói Free giới hạn 50 lệnh gọi ra ngoài mỗi lần chạy)
-services = [{ binding = "SELF", service = "bonbon-push" }]
+# Văn phòng hơn ~40 máy nhận thông báo: bỏ dấu # ở dòng dưới rồi deploy lại (sau lần deploy đầu tiên).
+# Worker sẽ tự gọi lại chính mình để chia nhỏ đợt gửi (gói Free giới hạn 50 lệnh gọi ra ngoài mỗi lần chạy).
+# services = [{ binding = "SELF", service = "bonbon-push" }]
 
 [vars]
 PROJECT_ID = "datcomtrua-14f62"
